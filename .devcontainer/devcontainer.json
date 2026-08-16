@@ -1,0 +1,39 @@
+{
+  "name": "Fantasy War Room",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+
+  // Install the app once, when the Codespace is created.
+  "postCreateCommand": "pip install --upgrade pip && pip install -e '.[dev]' && mkdir -p data",
+
+  // Start the server every time you open or resume the Codespace.
+  "postAttachCommand": {
+    "server": "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000"
+  },
+
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": {
+      "label": "Fantasy War Room",
+      "onAutoForward": "openPreview",
+      // Private: only you, signed in to GitHub, can open the URL.
+      "visibility": "private"
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python"
+      }
+    }
+  },
+
+  "remoteEnv": {
+    // Codespaces secrets named ESPN_LEAGUE_ID / ESPN_SWID / ESPN_S2 are picked
+    // up automatically -- the app accepts the bare names. You can also just
+    // type your league into the League tab once the app is running.
+    "FWR_DATABASE_URL": "sqlite:///./data/fantasy_war_room.db",
+    "FWR_DEMO_MODE": "false"
+  }
+}

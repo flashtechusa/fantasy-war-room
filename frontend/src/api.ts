@@ -362,8 +362,32 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
+export interface ConfigInfo {
+  espn_league_id: number | null
+  espn_season: number
+  demo_mode: boolean
+  my_team_id: number | null
+  my_draft_slot: number | null
+  swid_set: boolean
+  espn_s2_set: boolean
+  has_private_credentials: boolean
+  ready_for_espn: boolean
+  sources: Record<string, string>
+}
+
+export interface ConfigSaveResult {
+  saved: boolean
+  config: ConfigInfo
+  connection: { connected: boolean; league_name?: string; detail?: string } | null
+}
+
 export const api = {
   health: () => request<HealthInfo>('/api/health'),
+
+  config: () => request<ConfigInfo>('/api/config'),
+  saveConfig: (body: Record<string, unknown>) =>
+    request<ConfigSaveResult>('/api/config', { method: 'PUT', body: JSON.stringify(body) }),
+  resetConfig: () => request<{ config: ConfigInfo }>('/api/config', { method: 'DELETE' }),
   espnHealth: () =>
     request<{ connected: boolean; demo_mode: boolean; detail?: string; league_name?: string }>(
       '/api/health/espn',

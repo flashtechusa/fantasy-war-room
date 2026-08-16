@@ -13,7 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .api import routes_draft, routes_league, routes_players, routes_sim, routes_team
+from .api import (
+    routes_config,
+    routes_draft,
+    routes_league,
+    routes_players,
+    routes_sim,
+    routes_team,
+)
 from .api.deps import settings_dep
 from .config import Settings, get_settings
 from .db import get_db, init_db
@@ -62,6 +69,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(routes_config.router)
 app.include_router(routes_league.router)
 app.include_router(routes_players.router)
 app.include_router(routes_draft.router)
@@ -120,7 +128,8 @@ def espn_health(settings: Settings = Depends(settings_dep)) -> dict:
         return {
             "connected": False,
             "demo_mode": False,
-            "detail": "FWR_ESPN_LEAGUE_ID is not set.",
+            "detail": "No league configured. Enter your league on the League tab, "
+            "or set ESPN_LEAGUE_ID in the environment.",
         }
     try:
         client = build_espn_client(settings)

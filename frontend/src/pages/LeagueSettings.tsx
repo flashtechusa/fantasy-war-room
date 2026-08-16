@@ -6,10 +6,154 @@
  * built from YOUR league before you trust a single recommendation.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
+
+/**
+ * ESPN credentials, editable in the app.
+ *
+ * Exists so the app can be pointed at a league from a device where you can't
+ * edit a `.env` -- a Codespace, a tablet, a phone at the draft. Values are
+ * stored locally and the API never returns them; it only reports whether they
+ * are set.
+ */
+function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
+  const config = useAsync(() => api.config(), [])
+  const [open, setOpen] = useState(false)
+  const [leagueId, setLeagueId] = useState('')
+  const [season, setSeason] = useState('')
+  const [swid, setSwid] = useState('')
+  const [s2, setS2] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const current = config.data
+  const configured = Boolean(current?.espn_league_id) && !current?.demo_mode
+
+  // Open automatically when there's nothing configured — that's the first thing
+  // a new install needs to do.
+  useEffect(() => {
+    if (current && !current.espn_league_id) setOpen(true)
+  }, [current])
+
+  async function save() {
+    setSaving(true)
+    setResult(null)
+    try {
+      const body: Record<string, unknown> = { demo_mode: false }
+      if (leagueId.trim()) body.espn_league_id = Number(leagueId.trim())
+      if (season.trim()) body.espn_season = Number(season.trim())
+      if (swid.trim()) body.espn_swid = swid.trim()
+      if (s2.trim()) body.espn_s2 = s2.trim()
+
+      const response = await api.saveConfig(body)
+      setSwid('')
+      setS2('')
+      config.reload()
+
+      if (response.connection?.connected) {
+        setResult({ ok: true, text: `Connected to "${response.connection.league_name}".` })
+        setOpen(false)
+      } else if (response.connection) {
+        setResult({ ok: false, text: response.connection.detail ?? 'Could not reach ESPN.' })
+      } else {
+        setResult({ ok: true, text: 'Saved.' })
+      }
+      onSaved()
+    } catch (error) {
+      setResult({ ok: false, text: (error as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title="ESPN connection">
+      <div className="row between" style={{ marginBottom: open ? 12 : 0 }}>
+        <div className="small">
+          {configured ? (
+            <>
+              League <strong>{current?.espn_league_id}</strong> · {current?.espn_season}
+              <div className="tiny faint">
+                {current?.has_private_credentials
+                  ? 'Private-league cookies stored'
+                  : 'Public league (no cookies)'}
+              </div>
+            </>
+          ) : (
+            <span className="muted">No league configured yet.</span>
+          )}
+        </div>
+        <button className="btn sm" onClick={() => setOpen((v) => !v)}>
+          {open ? 'Cancel' : configured ? 'Change' : 'Set up'}
+        </button>
+      </div>
+
+      {open && (
+        <>
+          <label className="tiny faint">LEAGUE ID</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            placeholder={String(current?.espn_league_id ?? '123456')}
+            value={leagueId}
+            onChange={(e) => setLeagueId(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">SEASON</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            placeholder={String(current?.espn_season ?? 2026)}
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">
+            SWID {current?.swid_set && <span className="muted">(stored — leave blank to keep)</span>}
+          </label>
+          <input
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="{XXXXXXXX-XXXX-...}"
+            value={swid}
+            onChange={(e) => setSwid(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">
+            ESPN_S2{' '}
+            {current?.espn_s2_set && <span className="muted">(stored — leave blank to keep)</span>}
+          </label>
+          <input
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="AEC..."
+            value={s2}
+            onChange={(e) => setS2(e.target.value)}
+            style={{ marginBottom: 10 }}
+          />
+          <button className="btn primary block" onClick={save} disabled={saving}>
+            {saving ? 'Testing connection…' : 'Save & test connection'}
+          </button>
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            Cookies are stored in your local database and are never sent back to the browser.
+            Public leagues need only the league id.
+          </div>
+        </>
+      )}
+
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 export default function LeagueSettings({ onChange }: { onChange?: () => void }) {
   const health = useAsync(() => api.health(), [])
@@ -61,6 +205,14 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
   return (
     <>
       {message && <Banner kind={message.kind === 'error' ? 'error' : 'info'}>{message.text}</Banner>}
+
+      <EspnConnectionForm
+        onSaved={() => {
+          health.reload()
+          league.reload()
+          onChange?.()
+        }}
+      />
 
       <Card title="Connection">
         {health.loading ? (

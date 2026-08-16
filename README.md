@@ -23,8 +23,25 @@ Recommended: Tobias Ibarra                       Draft Score 91.8
 
 ## Get it running
 
-**Requirements:** Python 3.10+. That's it — a built UI is committed, so Node is
-optional.
+### From a browser (no install) — GitHub Codespaces
+
+Runs on GitHub's machines, gets a private HTTPS URL you can open on your phone,
+and unlike most sandboxes it can reach ESPN.
+
+**[▶ Open in a Codespace](https://github.com/codespaces/new?repo=flashtechusa/fantasy-war-room&ref=claude/fantasy-war-room-app-n6edzt)**
+
+1. Click the link, choose **Create codespace**. It installs and starts the app
+   automatically (~2 minutes the first time).
+2. When the **Ports** tab shows port 8000, open its URL — that's your link.
+   It's private to your GitHub account.
+3. In the app, open the **League** tab, enter your league id and cookies, tap
+   **Save & test connection**, then **Import league**.
+
+The forwarded URL works from your phone as long as you're signed in to GitHub.
+
+### On your own machine
+
+**Requirements:** Python 3.10+. A built UI is committed, so Node is optional.
 
 ```bash
 git clone https://github.com/flashtechusa/fantasy-war-room.git
@@ -34,12 +51,9 @@ git checkout claude/fantasy-war-room-app-n6edzt
 ```
 
 The script creates the virtualenv, installs dependencies, prompts for your ESPN
-league id and cookies, verifies the connection and starts the server. It prints
-two URLs: `http://localhost:8000` for this machine and `http://<your-lan-ip>:8000`
-for your phone on the same Wi-Fi. Open the **League** tab and tap **Import
-league**.
-
-Re-running `./scripts/start.sh` later just starts it again.
+credentials, verifies the connection and starts the server. It prints
+`http://localhost:8000` and `http://<your-lan-ip>:8000` — the second works from
+your phone on the same Wi-Fi.
 
 <details>
 <summary>Windows (PowerShell)</summary>
@@ -47,13 +61,20 @@ Re-running `./scripts/start.sh` later just starts it again.
 ```powershell
 python -m venv .venv
 .venv\Scripts\pip install -e .
-copy .env.example .env      # then edit in your league id and cookies
 .venv\Scripts\python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
 ```
+Then enter your league on the **League** tab.
 </details>
 
-There is no hosted version — this runs on your own machine, which is also what
-keeps your ESPN session cookies on your own machine.
+### Credentials
+
+You never have to edit a file. The **League** tab has a form for your league id,
+season, SWID and espn_s2; it saves them locally, tests the connection
+immediately, and never sends them back to the browser. Environment variables
+(`.env`, Codespaces secrets, Docker) still work and are used as the fallback.
+
+There is no public hosted version — the app runs on infrastructure you control,
+which is what keeps your ESPN session cookies under your control.
 
 ---
 

@@ -34,6 +34,26 @@ class Base(DeclarativeBase):
 # ---------------------------------------------------------------------------
 
 
+class AppConfig(Base):
+    """Runtime configuration set through the UI, overlaid on the environment.
+
+    Exists so the app can be pointed at a league without editing a file --
+    which matters when you're running it somewhere you only have a browser
+    (a Codespace, a phone). Values here take precedence over `.env`.
+
+    ESPN cookies stored here are exactly as sensitive as the ones in `.env`:
+    they live in your local SQLite file and are never returned by the API.
+    """
+
+    __tablename__ = "app_config"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(String(2000), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+
 class League(Base):
     """One row per (league_id, season). Everything else hangs off this."""
 

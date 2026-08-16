@@ -15,10 +15,16 @@ from ..models import DraftSession, League
 from ..services import draft as draft_service
 from ..services.board import LeagueNotImported, build_board, build_engine
 from ..services.importer import get_active_league
+from ..services.runtime_config import effective_settings
 
 
-def settings_dep() -> Settings:
-    return get_settings()
+def settings_dep(session: Session = Depends(get_db)) -> Settings:
+    """Environment settings with any UI-entered overrides applied.
+
+    Every route that touches ESPN goes through this, so credentials typed into
+    the app take effect immediately without a restart.
+    """
+    return effective_settings(session, get_settings())
 
 
 def league_dep(
