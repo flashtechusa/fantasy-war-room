@@ -12,7 +12,15 @@ against ESPN's documented payload shapes and is unit-tested with realistic
 fixtures, but it has **not been run against a live ESPN league** — this repo was
 built without league credentials.
 
-Before drafting, run an import and check the League Settings screen carefully:
+A live attempt was made with real credentials for league `11507` (2026). The
+config layer resolved them correctly (SWID normalised, private auth detected),
+but the request never left the machine: the development environment's egress
+proxy denies `lm-api-reads.fantasy.espn.com` by policy (HTTP 403 on CONNECT).
+Nothing about the credentials or the client code was disproven — the network
+path simply wasn't available. **Run `python scripts/verify_espn.py` on your own
+machine to close this out.**
+
+Before drafting, run that script and then check the League Settings screen:
 
 - [ ] Scoring rules match your league exactly (compare against ESPN's settings page)
 - [ ] Starting slots, bench and IR counts are right

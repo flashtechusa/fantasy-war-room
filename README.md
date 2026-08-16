@@ -88,7 +88,24 @@ All ESPN configuration lives in environment variables. Nothing is ever hard-code
 | `FWR_ESPN_SWID` | private leagues only | The `SWID` cookie, braces included |
 | `FWR_ESPN_S2` | private leagues only | The `espn_s2` cookie |
 
+The bare names are accepted too — `ESPN_LEAGUE_ID`, `ESPN_YEAR` / `ESPN_SEASON`,
+`ESPN_SWID` / `SWID`, `ESPN_S2` — so credentials copied from anywhere else can be
+pasted straight in. The `FWR_`-prefixed name wins if both are set. Point
+`FWR_ENV_FILE` at a different file to keep a second league's config side by side.
+
 **Public leagues** need only the league id and season.
+
+### Verify before you trust it
+
+```bash
+python scripts/verify_espn.py
+```
+
+This connects, then prints your league's roster slots, the full scoring table,
+every team and owner, player-pool coverage, and the top 15 players with **our**
+projection next to ESPN's. Compare the scoring table against your league's
+settings page — those rules drive every ranking in the app. Cookies are redacted
+in the output, and it exits non-zero on failure, so it doubles as a smoke test.
 
 ### Finding SWID and espn_s2 (private leagues)
 

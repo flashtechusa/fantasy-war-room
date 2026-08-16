@@ -99,10 +99,30 @@ class TestCredentialHandling:
         assert settings.espn_s2 is None
 
     def test_credentials_are_never_defaulted(self):
-        settings = Settings()
+        settings = Settings(_env_file=None)
         assert settings.espn_swid is None
         assert settings.espn_s2 is None
         assert not settings.has_espn_credentials
+
+    def test_bare_espn_env_names_are_accepted(self, monkeypatch, tmp_path):
+        """Pasting the conventional ESPN_* names should just work."""
+        monkeypatch.setenv("ESPN_LEAGUE_ID", "11507")
+        monkeypatch.setenv("ESPN_YEAR", "2026")
+        monkeypatch.setenv("ESPN_SWID", "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")
+        monkeypatch.setenv("ESPN_S2", "cookie-value")
+        (tmp_path / ".env").write_text("")
+
+        settings = Settings(_env_file=str(tmp_path / ".env"))
+        assert settings.espn_league_id == 11507
+        assert settings.espn_season == 2026
+        assert settings.espn_swid == "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
+        assert settings.has_espn_credentials
+
+    def test_prefixed_names_win_over_bare_ones(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("ESPN_LEAGUE_ID", "11507")
+        monkeypatch.setenv("FWR_ESPN_LEAGUE_ID", "22222")
+        (tmp_path / ".env").write_text("")
+        assert Settings(_env_file=str(tmp_path / ".env")).espn_league_id == 22222
 
 
 class TestSlotParsing:

@@ -6,10 +6,11 @@ Every setting is sourced from the environment (or a local `.env`) with the
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -24,10 +25,26 @@ class Settings(BaseSettings):
     )
 
     # --- ESPN -------------------------------------------------------------
-    espn_league_id: int | None = None
-    espn_season: int = 2026
-    espn_swid: str | None = None
-    espn_s2: str | None = None
+    # Accept the `FWR_`-prefixed names *and* the bare `ESPN_*` names, because
+    # the bare ones are what ESPN tooling and every forum post use -- pasting
+    # them straight in should just work.  `ESPN_YEAR` is accepted as a synonym
+    # for the season for the same reason.
+    espn_league_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_ESPN_LEAGUE_ID", "ESPN_LEAGUE_ID"),
+    )
+    espn_season: int = Field(
+        default=2026,
+        validation_alias=AliasChoices("FWR_ESPN_SEASON", "ESPN_SEASON", "ESPN_YEAR"),
+    )
+    espn_swid: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_ESPN_SWID", "ESPN_SWID", "SWID"),
+    )
+    espn_s2: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_ESPN_S2", "ESPN_S2", "ESPN_COOKIE_S2"),
+    )
 
     # --- Draft ------------------------------------------------------------
     my_team_id: int | None = None
@@ -95,6 +112,16 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    """Resolve configuration.
+
+    `FWR_ENV_FILE` overrides which env file is read -- point it at a second
+    file to keep configs for more than one league side by side, or set it to
+    an empty string to ignore `.env` entirely (which is what the test suite
+    does, so a developer's real credentials can never leak into a test run).
+    """
+    override = os.environ.get("FWR_ENV_FILE")
+    if override is not None:
+        return Settings(_env_file=override or None)
     return Settings()
 
 

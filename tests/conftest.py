@@ -15,13 +15,19 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Point config and the database at a per-test temp directory."""
+    # Ignore any real `.env` on the developer's machine entirely.
+    monkeypatch.setenv("FWR_ENV_FILE", "")
     monkeypatch.setenv("FWR_DEMO_MODE", "true")
     monkeypatch.setenv("FWR_ESPN_SEASON", "2026")
     monkeypatch.setenv("FWR_DATABASE_URL", f"sqlite:///{tmp_path / 'test.db'}")
-    monkeypatch.delenv("FWR_ESPN_LEAGUE_ID", raising=False)
-    monkeypatch.delenv("FWR_ESPN_SWID", raising=False)
-    monkeypatch.delenv("FWR_ESPN_S2", raising=False)
-    monkeypatch.delenv("FWR_MY_DRAFT_SLOT", raising=False)
+    # Clear both the prefixed and the bare ESPN names, so a developer's real
+    # credentials in the shell can never leak into a test run.
+    for name in (
+        "FWR_ESPN_LEAGUE_ID", "FWR_ESPN_SWID", "FWR_ESPN_S2", "FWR_MY_DRAFT_SLOT",
+        "ESPN_LEAGUE_ID", "ESPN_SEASON", "ESPN_YEAR", "ESPN_SWID", "SWID",
+        "ESPN_S2", "ESPN_COOKIE_S2",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
     from app import config, db
     from app.services import board

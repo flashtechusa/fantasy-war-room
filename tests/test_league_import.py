@@ -22,17 +22,19 @@ class TestProviderSelection:
     def test_demo_mode_uses_the_demo_provider(self):
         from app.config import Settings
 
-        assert isinstance(build_provider(Settings(demo_mode=True)), DemoProvider)
+        assert isinstance(build_provider(Settings(demo_mode=True, _env_file=None)), DemoProvider)
 
     def test_missing_league_id_falls_back_to_demo(self):
         from app.config import Settings
 
-        assert isinstance(build_provider(Settings(demo_mode=False)), DemoProvider)
+        assert isinstance(build_provider(Settings(demo_mode=False, _env_file=None)), DemoProvider)
 
     def test_configured_league_uses_espn(self):
         from app.config import Settings
 
-        provider = build_provider(Settings(demo_mode=False, espn_league_id=99))
+        provider = build_provider(
+            Settings(demo_mode=False, espn_league_id=99, _env_file=None)
+        )
         assert isinstance(provider, EspnProvider)
 
 
