@@ -18,8 +18,11 @@ data/
 
 node_modules/
 frontend/dist/
-backend/app/static/
 .vite/
+
+# The built UI IS committed (backend/app/static) so the app runs with
+# Python alone -- no Node required. scripts/start.sh refreshes it when
+# npm is available.
 
 .DS_Store
 .idea/
