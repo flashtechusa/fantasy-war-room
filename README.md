@@ -21,6 +21,42 @@ Recommended: Tobias Ibarra                       Draft Score 91.8
 
 ---
 
+## Get it running
+
+**Requirements:** Python 3.10+. That's it — a built UI is committed, so Node is
+optional.
+
+```bash
+git clone https://github.com/flashtechusa/fantasy-war-room.git
+cd fantasy-war-room
+git checkout claude/fantasy-war-room-app-n6edzt
+./scripts/start.sh
+```
+
+The script creates the virtualenv, installs dependencies, prompts for your ESPN
+league id and cookies, verifies the connection and starts the server. It prints
+two URLs: `http://localhost:8000` for this machine and `http://<your-lan-ip>:8000`
+for your phone on the same Wi-Fi. Open the **League** tab and tap **Import
+league**.
+
+Re-running `./scripts/start.sh` later just starts it again.
+
+<details>
+<summary>Windows (PowerShell)</summary>
+
+```powershell
+python -m venv .venv
+.venv\Scripts\pip install -e .
+copy .env.example .env      # then edit in your league id and cookies
+.venv\Scripts\python -m uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000
+```
+</details>
+
+There is no hosted version — this runs on your own machine, which is also what
+keeps your ESPN session cookies on your own machine.
+
+---
+
 ## Contents
 
 1. [Installation](#1-installation)
