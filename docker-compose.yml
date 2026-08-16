@@ -1,0 +1,15 @@
+services:
+  war-room:
+    build: .
+    image: fantasy-war-room
+    ports:
+      - "8000:8000"
+    # Credentials come from .env and are never baked into the image.
+    env_file:
+      - .env
+    environment:
+      FWR_DATABASE_URL: sqlite:///./data/fantasy_war_room.db
+    volumes:
+      # Keep the SQLite database across rebuilds.
+      - ./data:/app/data
+    restart: unless-stopped
