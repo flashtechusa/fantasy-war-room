@@ -412,6 +412,9 @@ export interface LineupResponse {
   close_calls: { slot: string; starting: string | null; over: string | null; margin: number }[]
   unfilled_slots: string[]
   estimated_projections: string[]
+  projection_basis: 'espn_weekly' | 'season_average' | 'mixed' | 'none'
+  estimated_count: number
+  roster_count: number
 }
 
 export interface WaiverResponse {

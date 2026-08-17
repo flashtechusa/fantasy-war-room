@@ -83,8 +83,25 @@ def start_sit(
     result = optimise_lineup(roster, league_shape(league), week)
 
     estimated = [p.name for p in roster if not p.week_projection_is_real]
+    # ESPN publishes real per-week splits only a short way ahead. Past that the
+    # fallback is the season total spread evenly, which is the *same number
+    # every week* -- so consecutive future weeks look identical and the screen
+    # reads as broken. Say which case we are in rather than leaving the reader
+    # to infer it from a list of names.
+    if not roster:
+        projection_basis = "none"
+    elif not estimated:
+        projection_basis = "espn_weekly"
+    elif len(estimated) == len(roster):
+        projection_basis = "season_average"
+    else:
+        projection_basis = "mixed"
+
     return {
         "week": week,
+        "projection_basis": projection_basis,
+        "estimated_count": len(estimated),
+        "roster_count": len(roster),
         "projected_points": result.projected_points,
         "points_vs_naive": result.points_vs_naive,
         "starters": [

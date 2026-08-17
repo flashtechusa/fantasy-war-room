@@ -10,37 +10,9 @@ from __future__ import annotations
 import pytest
 
 
-@pytest.fixture
-def drafted_league(client):
-    """An imported league where every team holds a roster."""
-    client.post("/api/league/import")
-
-    from app.db import session_scope
-    from app.models import League, Player
-
-    with session_scope() as session:
-        league = session.query(League).one()
-        players = (
-            session.query(Player)
-            .filter(Player.season == league.season)
-            .order_by(Player.espn_rank)
-            .limit(len(league.teams) * 14)
-            .all()
-        )
-        teams = sorted(league.teams, key=lambda t: t.espn_team_id)
-        for index, player in enumerate(players):
-            team = teams[index % len(teams)]
-            roster = list(team.roster or [])
-            roster.append({"espn_player_id": player.espn_player_id, "slot": "BE"})
-            team.roster = roster
-        session.commit()
-
-    return client
-
-
 def _simulate(client) -> dict:
     response = client.post("/api/simulate", json={"simulations": 25, "seed": 7})
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     return response.json()
 
 

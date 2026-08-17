@@ -56,6 +56,23 @@ export default function Week() {
         </div>
       </Card>
 
+      {data.projection_basis === 'season_average' && (
+        <Banner kind="info">
+          <strong>ESPN has not published week-{data.week} projections yet.</strong> Every
+          number below is that player's season total divided evenly across the season, so
+          future weeks will all look identical until ESPN publishes real weekly numbers —
+          usually a week or two ahead. Start/sit calls this far out are not meaningful.
+        </Banner>
+      )}
+
+      {data.projection_basis === 'mixed' && (
+        <Banner kind="info">
+          {data.estimated_count} of {data.roster_count} players have no published week-
+          {data.week} projection and are shown as season averages. They are listed at the
+          bottom.
+        </Banner>
+      )}
+
       {data.warnings.length > 0 && (
         <Banner kind="warn">
           <strong>Check these:</strong>
