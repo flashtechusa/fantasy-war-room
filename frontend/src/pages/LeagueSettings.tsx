@@ -177,8 +177,15 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
     try {
       await api.saveConfig({ fantasypros_api_key: key.trim() })
       setKey('')
+      // Confirm against the server rather than assuming: a save that is
+      // accepted but not stored is exactly the failure this had.
+      const after = await api.config()
+      if (after.fantasypros_key_set) {
+        setResult({ ok: true, text: 'Key saved. Import to pull projections.' })
+      } else {
+        setResult({ ok: false, text: 'The server did not store the key. Nothing was saved.' })
+      }
       config.reload()
-      setResult({ ok: true, text: 'Key saved. Import to pull projections.' })
     } catch (error) {
       setResult({ ok: false, text: (error as Error).message })
     } finally {
@@ -217,10 +224,10 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
         API key {stored && <span className="muted">(stored — leave blank to keep)</span>}
       </label>
       <input
-        type="text"
+        type="password"
         autoComplete="off"
         spellCheck={false}
-        placeholder="Paste your FantasyPros API key"
+        placeholder={stored ? '••••••••••••  (stored)' : 'Paste your FantasyPros API key'}
         value={key}
         onChange={(e) => setKey(e.target.value)}
         style={{ marginBottom: 10 }}

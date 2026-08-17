@@ -172,3 +172,37 @@ class TestImportEndpoint:
         secret = "test-key-do-not-echo"
         client.put("/api/config", json={"fantasypros_api_key": secret})
         assert secret not in client.get("/api/config").text
+
+
+class TestKeyIsActuallyStored:
+    """The save endpoint accepted the key and threw it away.
+
+    Pydantic drops unknown fields by default, and the request model had no
+    `fantasypros_api_key`, so the API returned 200 while storing nothing and
+    the UI reported success.
+    """
+
+    def test_saving_a_key_makes_it_stored(self, client):
+        client.put("/api/config", json={"fantasypros_api_key": "abc123"})
+        assert client.get("/api/config").json()["fantasypros_key_set"] is True
+
+    def test_an_unset_key_reports_as_unset(self, client):
+        assert client.get("/api/config").json()["fantasypros_key_set"] is False
+
+    def test_the_import_becomes_reachable_once_a_key_exists(self, client):
+        client.post("/api/league/import")
+        assert client.post("/api/league/projections/fantasypros").status_code == 400
+        client.put("/api/config", json={"fantasypros_api_key": "abc123"})
+        # Now it gets past the key check and fails on the network instead.
+        response = client.post("/api/league/projections/fantasypros")
+        assert "key" not in response.json().get("detail", "").lower()
+
+    def test_an_unknown_field_is_rejected_rather_than_dropped(self, client):
+        """Failing loudly is what would have caught the original bug."""
+        response = client.put("/api/config", json={"not_a_real_setting": "x"})
+        assert response.status_code == 422
+
+    def test_clearing_the_key_unsets_it(self, client):
+        client.put("/api/config", json={"fantasypros_api_key": "abc123"})
+        client.put("/api/config", json={"fantasypros_api_key": ""})
+        assert client.get("/api/config").json()["fantasypros_key_set"] is False

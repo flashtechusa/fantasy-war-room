@@ -32,6 +32,12 @@ class EspnConfigRequest(BaseModel):
     my_team_id: int | None = None
     my_draft_slot: int | None = Field(default=None, ge=1, le=32)
     faab_remaining: int | None = Field(default=None, ge=0, le=100000)
+    fantasypros_api_key: str | None = None
+
+    # Reject unknown fields rather than dropping them. A missing field here
+    # meant a saved API key was silently discarded while the app reported
+    # success -- failing loudly would have caught it immediately.
+    model_config = {"extra": "forbid"}
 
 
 @router.get("")
