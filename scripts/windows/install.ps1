@@ -3,11 +3,14 @@
     Install Fantasy War Room on a Windows VPS and keep it running.
 
 .DESCRIPTION
-    Installs Python and Git if missing, clones (or updates) the repo, builds a
+    Installs Python if missing, fetches (or updates) the code, builds a
     virtualenv, and registers a scheduled task so the app starts at boot and
     restarts itself if it ever falls over.
 
-    The frontend is committed to the repo already built, so Node is not needed.
+    Python is the only hard requirement. The frontend is committed already
+    built, so Node is not needed, and Git is optional -- without it the code is
+    refreshed from the branch zip instead. On servers without winget, Python is
+    downloaded straight from python.org.
 
 .EXAMPLE
     # From an elevated PowerShell prompt:
@@ -29,7 +32,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$RepoUrl = 'https://github.com/flashtechusa/fantasy-war-room.git'
 
 function Write-Step($Message) { Write-Host "`n==> $Message" -ForegroundColor Cyan }
 function Write-Ok($Message)   { Write-Host "    $Message" -ForegroundColor Green }
@@ -46,54 +48,134 @@ function Test-Command($Name) {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
-function Install-Prereq($DisplayName, $Command, $WingetId) {
-    if (Test-Command $Command) { Write-Ok "$DisplayName already present."; return }
-    if (-not (Test-Command 'winget')) {
-        throw "$DisplayName is missing and winget is unavailable on this server. " +
-              "Install $DisplayName manually, then re-run this script."
-    }
-    Write-Step "Installing $DisplayName..."
-    winget install --id $WingetId --silent --accept-source-agreements --accept-package-agreements
-    # winget updates PATH for new processes only; refresh it for this one.
+function Refresh-Path {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
                 [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not (Test-Command $Command)) {
-        throw "$DisplayName installed but '$Command' is still not on PATH. Open a new " +
-              'PowerShell window and re-run this script.'
+}
+
+function Find-Python {
+    <#
+        Returns a path to a real Python >= 3.10, or $null.
+
+        Windows ships a stub at 'python.exe' that opens the Microsoft Store, so
+        a bare Test-Command is not enough -- the interpreter has to actually
+        report a version. The 'py' launcher is tried first because it is not
+        shadowed by that stub.
+    #>
+    $candidates = @()
+    if (Test-Command 'py')     { $candidates += ,@('py', @('-3', '-c')) }
+    if (Test-Command 'python') { $candidates += ,@('python', @('-c')) }
+    foreach ($dir in @("$env:ProgramFiles\Python312", "$env:ProgramFiles\Python311",
+                       "$env:LOCALAPPDATA\Programs\Python\Python312")) {
+        $exe = Join-Path $dir 'python.exe'
+        if (Test-Path $exe) { $candidates += ,@($exe, @('-c')) }
     }
-    Write-Ok "$DisplayName installed."
+
+    foreach ($candidate in $candidates) {
+        $exe, $prefix = $candidate
+        try {
+            # Not $args -- that is an automatic variable and cannot be assigned.
+            $probeArgs = $prefix + @('import sys; print("%d.%d" % sys.version_info[:2])')
+            $reported = (& $exe @probeArgs 2>$null | Select-Object -First 1)
+            if ($reported -and [version]$reported -ge [version]'3.10') {
+                # Resolve to a concrete interpreter path for the venv step.
+                $resolveArgs = $prefix + @('import sys; print(sys.executable)')
+                $full = (& $exe @resolveArgs 2>$null | Select-Object -First 1)
+                if ($full -and (Test-Path $full)) {
+                    return [pscustomobject]@{ Path = $full; Version = $reported }
+                }
+            }
+        } catch { }
+    }
+    return $null
 }
 
-Write-Step 'Checking prerequisites'
-Install-Prereq 'Git'    'git'    'Git.Git'
-Install-Prereq 'Python' 'python' 'Python.Python.3.12'
+Write-Step 'Checking for Python'
+$found = Find-Python
 
-$pythonVersion = (python -c 'import sys; print("%d.%d" % sys.version_info[:2])').Trim()
-if ([version]$pythonVersion -lt [version]'3.10') {
-    throw "Python $pythonVersion found, but 3.10 or newer is required."
+if (-not $found) {
+    if (Test-Command 'winget') {
+        Write-Step 'Installing Python via winget'
+        winget install --id Python.Python.3.12 --silent `
+            --accept-source-agreements --accept-package-agreements
+    } else {
+        # No winget (common on Windows Server) -- install straight from python.org.
+        $pyVersion = '3.12.7'
+        $installer = Join-Path $env:TEMP "python-$pyVersion-amd64.exe"
+        Write-Step "winget unavailable; downloading Python $pyVersion from python.org"
+        Invoke-WebRequest -UseBasicParsing `
+            -Uri "https://www.python.org/ftp/python/$pyVersion/python-$pyVersion-amd64.exe" `
+            -OutFile $installer
+        Write-Ok 'Downloaded. Installing silently (this takes a minute)...'
+        $proc = Start-Process -FilePath $installer -Wait -PassThru -ArgumentList @(
+            '/quiet', 'InstallAllUsers=1', 'PrependPath=1', 'Include_pip=1',
+            'Include_test=0', 'Include_launcher=1'
+        )
+        # 3010 = success, reboot advised. Neither blocks us.
+        if ($proc.ExitCode -notin @(0, 3010)) {
+            throw "Python installer exited with code $($proc.ExitCode)."
+        }
+    }
+    Refresh-Path
+    $found = Find-Python
+    if (-not $found) {
+        throw 'Python installed but could not be located. Close this window, open a ' +
+              'new Administrator PowerShell, and re-run this script.'
+    }
 }
-Write-Ok "Python $pythonVersion"
+
+$pythonExe = $found.Path
+Write-Ok "Python $($found.Version) at $pythonExe"
 
 # --- code -----------------------------------------------------------------
-if (Test-Path (Join-Path $InstallDir '.git')) {
-    Write-Step "Updating existing install at $InstallDir"
-    Push-Location $InstallDir
-    try {
-        git fetch origin $Branch
-        git checkout $Branch
-        git pull --ff-only origin $Branch
-    } finally { Pop-Location }
-} else {
-    Write-Step "Cloning into $InstallDir"
-    git clone --branch $Branch $RepoUrl $InstallDir
+# Git is optional: it is only needed to update in place. If it is missing we
+# refresh from the branch zip instead, which needs no extra software.
+$hasGit = Test-Command 'git'
+
+function Update-FromZip {
+    Write-Step 'Refreshing code from GitHub (zip)'
+    $zip     = Join-Path $env:TEMP 'fwr-update.zip'
+    $extract = Join-Path $env:TEMP 'fwr-update'
+    $url     = "https://github.com/flashtechusa/fantasy-war-room/archive/refs/heads/$Branch.zip"
+
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zip
+    if (Test-Path $extract) { Remove-Item $extract -Recurse -Force }
+    Expand-Archive $zip -DestinationPath $extract -Force
+
+    $inner = (Get-ChildItem $extract -Directory | Select-Object -First 1).FullName
+    # Copy everything except data\, so the league database is never clobbered.
+    Get-ChildItem $inner -Force | Where-Object { $_.Name -ne 'data' } | ForEach-Object {
+        Copy-Item $_.FullName -Destination $InstallDir -Recurse -Force
+    }
+    Write-Ok 'Code refreshed.'
 }
-Write-Ok 'Code is current.'
+
+if (Test-Path (Join-Path $InstallDir '.git')) {
+    if ($hasGit) {
+        Write-Step "Updating existing checkout at $InstallDir"
+        Push-Location $InstallDir
+        try {
+            git fetch origin $Branch
+            git checkout $Branch
+            git pull --ff-only origin $Branch
+        } finally { Pop-Location }
+        Write-Ok 'Code is current.'
+    } else {
+        Update-FromZip
+    }
+} elseif (Test-Path (Join-Path $InstallDir 'pyproject.toml')) {
+    # Code is already here (unpacked by hand) -- leave it alone.
+    Write-Ok "Using the code already at $InstallDir."
+} else {
+    Update-FromZip
+}
 
 # --- python environment ---------------------------------------------------
 Write-Step 'Building the virtual environment'
 $venv   = Join-Path $InstallDir '.venv'
 $python = Join-Path $venv 'Scripts\python.exe'
-if (-not (Test-Path $python)) { python -m venv $venv }
+if (-not (Test-Path $python)) { & $pythonExe -m venv $venv }
+if (-not (Test-Path $python)) { throw "Failed to create a virtualenv at $venv." }
 & $python -m pip install --upgrade pip --quiet
 & $python -m pip install --quiet $InstallDir
 if ($LASTEXITCODE -ne 0) { throw 'Dependency install failed.' }
