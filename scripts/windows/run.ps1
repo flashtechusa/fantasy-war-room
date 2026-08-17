@@ -51,6 +51,11 @@ if (-not (Test-Path $python)) {
 $env:FWR_DATABASE_URL = 'sqlite:///./data/fantasy_war_room.db'
 $env:PYTHONUNBUFFERED  = '1'
 
+# uvicorn logs to stderr, and under 'Stop' PowerShell turns any stderr from a
+# native command into a terminating error -- which killed a perfectly healthy
+# server on its own "Started server process" line. Relax it for the exec.
+$ErrorActionPreference = 'Continue'
+
 # 0.0.0.0 so the app is reachable from your phone, not just the console.
 & $python -m uvicorn app.main:app `
     --app-dir backend `
