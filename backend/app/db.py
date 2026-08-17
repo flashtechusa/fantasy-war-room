@@ -30,6 +30,13 @@ def _make_engine() -> Engine:
         path = settings.sqlite_path()
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
+            # Anchor the URL to the resolved path. Handing SQLAlchemy the raw
+            # relative URL makes the database location depend on the process
+            # working directory, so the same install opens a different file
+            # depending on how it was launched -- which silently presented a
+            # fully configured app as "no league configured yet" when a Windows
+            # service started it from C:\Windows\System32.
+            url = f"sqlite:///{path.as_posix()}"
 
     engine = create_engine(url, connect_args=connect_args, future=True)
 
