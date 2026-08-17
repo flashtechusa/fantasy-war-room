@@ -1,0 +1,42 @@
+# Always-on deployment.
+#
+# A Codespace suspends after ~30 minutes idle, which takes the app offline and
+# means nothing can run on a schedule.  This blueprint puts the same container
+# on a host that stays up, so the URL is permanent and background jobs (auto
+# lineup, waiver claims) have something to run on.
+#
+# Deploy from a phone: render.com -> New -> Blueprint -> pick this repo.
+# Credentials are NOT set here -- enter them in the app's League tab after the
+# first deploy, or add them as environment variables in the Render dashboard.
+
+services:
+  - type: web
+    name: fantasy-war-room
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # 'starter' stays awake.  The free plan spins down when idle, which would
+    # reproduce exactly the problem this deployment exists to fix.
+    plan: starter
+    healthCheckPath: /api/health
+    autoDeploy: true
+    branch: claude/fantasy-war-room-app-n6edzt
+    disk:
+      # SQLite lives here; without a disk every deploy would wipe the league.
+      name: fwr-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: FWR_DATABASE_URL
+        value: sqlite:///./data/fantasy_war_room.db
+      - key: FWR_DEMO_MODE
+        value: "false"
+      # Secrets: left unset on purpose so they are never committed. Set them in
+      # the dashboard, or type them into the app's League tab.
+      - key: FWR_ESPN_LEAGUE_ID
+        sync: false
+      - key: FWR_ESPN_SEASON
+        sync: false
+      - key: FWR_ESPN_SWID
+        sync: false
+      - key: FWR_ESPN_S2
+        sync: false
