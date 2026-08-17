@@ -13,7 +13,13 @@ from sqlalchemy.orm import Session
 from ..engine.scoring import LeagueScoring
 from ..engine.valuation import ValuationEngine
 from ..engine.weekly import WeeklyPlayer
-from ..models import League, Player, PlayerWeeklyProjection, ProjectionSource
+from ..models import (
+    HistoricalDraftPick,
+    League,
+    Player,
+    PlayerWeeklyProjection,
+    ProjectionSource,
+)
 
 #: Positions the season tools reason about.
 KNOWN_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST"}
@@ -188,6 +194,36 @@ def team_roster_ids(league: League, espn_team_id: int) -> set[int]:
         for entry in team.roster
         if entry.get("espn_player_id")
     }
+
+
+def rosters_by_team(session: Session, league: League) -> dict[int, set[int]]:
+    """Every team's roster, keyed by ESPN team id.
+
+    Prefers ESPN's rosters, which stay correct through adds, drops and trades.
+    Falls back to this season's draft results for a league that has drafted but
+    whose rosters we have not imported -- and so that the screen is not blank
+    mid-draft, when the draft log is the only record that exists.
+    """
+    rosters: dict[int, set[int]] = {}
+    for team in league.teams:
+        ids = team_roster_ids(league, team.espn_team_id)
+        if ids:
+            rosters[team.espn_team_id] = ids
+
+    if rosters:
+        return rosters
+
+    picks = session.scalars(
+        select(HistoricalDraftPick).where(
+            HistoricalDraftPick.league_id == league.id,
+            HistoricalDraftPick.season == league.season,
+        )
+    ).all()
+    for pick in picks:
+        if pick.espn_team_id is None or pick.espn_player_id is None:
+            continue
+        rosters.setdefault(int(pick.espn_team_id), set()).add(int(pick.espn_player_id))
+    return rosters
 
 
 def faab_remaining(league: League, session: Session) -> int:
