@@ -6,8 +6,10 @@
   "postCreateCommand": "pip install --upgrade pip && pip install -e '.[dev]' && mkdir -p data",
 
   // Start the server every time you open or resume the Codespace.
+  // --reload means a later `git pull` restarts the server on its own, so
+  // picking up a fix doesn't need a Codespace restart.
   "postAttachCommand": {
-    "server": "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000"
+    "server": "uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload --reload-dir backend"
   },
 
   "forwardPorts": [8000],
