@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import League, Player, PlayerProjection, ProjectionSource
@@ -72,6 +72,7 @@ def store_projections(
     }
 
     matched = 0
+    matched_names: list[str] = []
     for entry in provider_players:
         if not entry.raw_stats:
             continue
@@ -90,14 +91,30 @@ def store_projections(
         row.source_points = None
         row.projected_games = entry.projected_games
         matched += 1
+        matched_names.append(f"{entry.name} ({entry.position})")
 
     session.flush()
     return {
         "source": source_key,
         "received": len(provider_players),
         "matched": matched,
+        # Which players were covered, not just how many. With a truncated
+        # provider response the answer is "the top of each position", and
+        # seeing the names is what makes that obvious.
+        "matched_sample": matched_names[:60],
         **matcher.report,
     }
+
+
+#: Below this share of the player pool, a source is stored but left disabled.
+#:
+#: Blending a source that only covers the top of each position is worse than
+#: not blending at all: those players get an average of two providers while
+#: everyone else keeps one, so any systematic difference between the providers
+#: becomes a step change in the middle of the board -- and VOR is measured
+#: against that same distorted pool. FantasyPros' free tier truncates responses
+#: to roughly ten players a position, which lands well under this.
+MIN_COVERAGE = 0.5
 
 
 def import_fantasypros(
@@ -114,14 +131,39 @@ def import_fantasypros(
             "No FantasyPros API key configured. Add one on the League screen."
         )
 
-    ensure_source(session, SOURCE_KEY, "FantasyPros projections", weight)
+    source = ensure_source(session, SOURCE_KEY, "FantasyPros projections", weight)
     client = FantasyProsClient(api_key=api_key, season=league.season)
     players = client.projections(week=week)
     report = store_projections(session, league, players, SOURCE_KEY)
+
+    pool_size = session.scalar(
+        select(func.count(Player.id)).where(Player.season == league.season)
+    ) or 0
+    coverage = (report["matched"] / pool_size) if pool_size else 0.0
+    report["pool_size"] = pool_size
+    report["coverage"] = round(coverage, 3)
+
+    if coverage < MIN_COVERAGE:
+        source.enabled = False
+        report["enabled"] = False
+        report["warning"] = (
+            f"Only {report['matched']} of {pool_size} players were covered "
+            f"({coverage:.0%}). Blending a partial source would value the top of "
+            "each position on two providers and everyone else on one, which "
+            "distorts the rankings, so it has been left switched off. "
+            "FantasyPros' free tier truncates responses; a paid tier returns "
+            "full ones."
+        )
+    else:
+        source.enabled = True
+        report["enabled"] = True
+
+    session.flush()
     log.info(
-        "FantasyPros import: %s received, %s matched, %s unmatched",
+        "FantasyPros import: %s received, %s matched, %.0f%% coverage, enabled=%s",
         report["received"],
         report["matched"],
-        report["unmatched_count"],
+        coverage * 100,
+        report["enabled"],
     )
     return report

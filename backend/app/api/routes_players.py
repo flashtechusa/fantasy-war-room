@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from ..db import get_db
 from ..espn.constants import FLEX_ELIGIBLE
+from ..models import League, Player, PlayerProjection, ProjectionSource
 from .deps import BoardContext, board_dep
 from .serializers import serialize_board_meta, serialize_position, serialize_valuation
 
@@ -63,10 +67,65 @@ def read_board(
     }
 
 
+def _source_projections(
+    session: Session, engine, league: League, espn_player_id: int
+) -> list[dict]:
+    """Each provider's projection for this player, scored separately.
+
+    Reported per source rather than only as a blend, because coverage differs:
+    a provider may have a number for one player and nothing for the next. A
+    single blended figure hides which providers actually contributed, and hides
+    that they disagree -- both of which are exactly what a second source is for.
+
+    Every source is scored under the league's own rules, so these numbers are
+    comparable with each other and with the blended total.
+    """
+    player = session.scalars(
+        select(Player).where(
+            Player.season == league.season,
+            Player.espn_player_id == espn_player_id,
+        )
+    ).first()
+    if player is None:
+        return []
+
+    sources = {
+        row.key: row
+        for row in session.scalars(select(ProjectionSource)).all()
+    }
+    rows = session.scalars(
+        select(PlayerProjection).where(PlayerProjection.player_id == player.id)
+    ).all()
+
+    out: list[dict] = []
+    for row in rows:
+        meta = sources.get(row.source_key)
+        points = (
+            engine.scoring.score(row.raw_stats or {}, player.position)
+            if row.raw_stats
+            else None
+        )
+        out.append(
+            {
+                "key": row.source_key,
+                "label": meta.label if meta else row.source_key,
+                "points": round(points, 2) if points is not None else None,
+                "weight": meta.weight if meta else 0.0,
+                # A stored-but-disabled source is shown for comparison and
+                # marked as not counting, rather than quietly omitted.
+                "counts_towards_blend": bool(meta.enabled) if meta else False,
+                "has_data": bool(row.raw_stats),
+            }
+        )
+    out.sort(key=lambda item: (not item["counts_towards_blend"], item["key"]))
+    return out
+
+
 @router.get("/{espn_player_id}")
 def read_player(
     espn_player_id: int,
     context: BoardContext = Depends(board_dep),
+    session: Session = Depends(get_db),
 ) -> dict:
     """One player, with the full reasoning and score breakdown."""
     match = next(
@@ -97,5 +156,8 @@ def read_player(
 
     payload = serialize_valuation(match, detail=True)
     payload["scoring_breakdown"] = scoring_breakdown
+    payload["source_projections"] = _source_projections(
+        session, engine, context.league, espn_player_id
+    )
     payload["draft_position"] = serialize_position(context.position)
     return payload

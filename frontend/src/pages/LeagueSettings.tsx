@@ -168,6 +168,7 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
   const [saving, setSaving] = useState(false)
   const [importing, setImporting] = useState(false)
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [covered, setCovered] = useState<string[]>([])
 
   const stored = Boolean(config.data?.fantasypros_key_set)
 
@@ -199,11 +200,15 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
     try {
       const report = await api.importFantasyPros()
       const missed = report.unmatched_count + report.ambiguous_count
+      const base =
+        `Matched ${report.matched} of ${report.received} players` +
+        (missed ? `, ${missed} skipped` : '') +
+        ` — ${Math.round(report.coverage * 100)}% of your player pool.`
+      setCovered(report.matched_sample ?? [])
       setResult({
-        ok: report.matched > 0,
-        text:
-          `Matched ${report.matched} of ${report.received} players` +
-          (missed ? `. ${missed} could not be matched and were skipped.` : '.'),
+        // Partial coverage is not a success: the source is stored but not used.
+        ok: report.enabled,
+        text: report.warning ? `${base} ${report.warning}` : base,
       })
       onImported()
     } catch (error) {
@@ -254,6 +259,21 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
         <div style={{ marginTop: 10 }}>
           <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
         </div>
+      )}
+
+      {covered.length > 0 && (
+        <details style={{ marginTop: 10 }}>
+          <summary className="small muted" style={{ cursor: 'pointer' }}>
+            Which {covered.length} players FantasyPros covered
+          </summary>
+          <div className="row wrap" style={{ gap: 5, marginTop: 8 }}>
+            {covered.map((name) => (
+              <span key={name} className="pill">
+                {name}
+              </span>
+            ))}
+          </div>
+        </details>
       )}
     </Card>
   )

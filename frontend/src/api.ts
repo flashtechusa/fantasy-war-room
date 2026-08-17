@@ -604,8 +604,13 @@ export const api = {
       matched: number
       unmatched_count: number
       ambiguous_count: number
+      matched_sample: string[]
       unmatched_sample: string[]
       ambiguous_sample: string[]
+      pool_size: number
+      coverage: number
+      enabled: boolean
+      warning?: string
     }>('/api/league/projections/fantasypros', { method: 'POST' }),
 
   lineup: (week?: number) =>
