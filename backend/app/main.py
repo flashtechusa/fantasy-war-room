@@ -18,6 +18,7 @@ from .api import (
     routes_draft,
     routes_league,
     routes_players,
+    routes_season,
     routes_sim,
     routes_team,
 )
@@ -73,6 +74,7 @@ app.include_router(routes_config.router)
 app.include_router(routes_league.router)
 app.include_router(routes_players.router)
 app.include_router(routes_draft.router)
+app.include_router(routes_season.router)
 app.include_router(routes_team.router)
 app.include_router(routes_sim.router)
 

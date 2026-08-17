@@ -86,10 +86,11 @@ which is what keeps your ESPN session cookies under your control.
 4. [Importing a league](#4-importing-a-league)
 5. [Running draft simulations](#5-running-draft-simulations)
 6. [Using Live Draft Mode](#6-using-live-draft-mode)
-7. [Deployment](#7-deployment)
-8. [How the valuation engine works](#how-the-valuation-engine-works)
-9. [Project layout](#project-layout)
-10. [Testing](#testing)
+7. [Season tools](#7-season-tools)
+8. [Deployment](#8-deployment)
+9. [How the valuation engine works](#how-the-valuation-engine-works)
+10. [Project layout](#project-layout)
+11. [Testing](#testing)
 
 ---
 
@@ -329,7 +330,56 @@ by marginal value, and a roster construction score with the reasons behind it.
 
 ---
 
-## 7. Deployment
+## 7. Season tools
+
+Once the draft is done the app's centre of gravity moves to three screens. All
+three answer the same question in the same currency -- **marginal lineup
+points** -- because "does this help me win?" is the only thing that matters.
+
+### Week (start/sit)
+
+Your optimal lineup for a given week, with the reasoning for every slot:
+
+```
+QB   Trevon Calloway    21.9   +4.2 pts over Jalen Fontaine (17.7)
+RB   Marcus Boone       20.6   +20.6 pts over Tobias Jennings (0.0)
+FLEX Dax Yearwood       14.2   Essentially a coin flip -- +0.5 pts over Marcus Carrington
+```
+
+It reports what the optimal lineup gains over simply starting your best
+season-long players, flags bye weeks and injury designations, and separates out
+**coin flips** -- calls inside the projections' margin of error, where your read
+on the matchup is worth more than the number.
+
+A player ruled `OUT`, on IR or suspended is projected at zero and will never be
+started while an alternative exists.
+
+### Waivers
+
+Every free agent is valued by rebuilding your optimal lineup with him on the
+roster and the worst droppable player gone. Two horizons, because they disagree:
+a streaming defense can win you Sunday while being worthless in November.
+
+Each target names the player to drop, a FAAB bid derived from your league's
+actual budget, and a verdict: `must-add`, `starter`, `streamer`, `stash`, `depth`.
+Players who improve nothing are omitted rather than padded into a top-20.
+
+Starters and high-VOR bench players are never suggested as drops.
+
+### Trade
+
+Both sides are evaluated by lineup delta, not raw points -- trading your RB3 for
+someone's WR2 can be a clear win even though you gave up more total projection,
+because the RB3 was never starting. Reports this week and rest-of-season for
+each side, positional changes, and warnings when a trade leaves you one injury
+away from an unfillable slot.
+
+Verdicts respect a noise floor: gaps under 3 points are reported as `neutral`
+rather than dressed up as insight.
+
+---
+
+## 8. Deployment
 
 ### Docker
 

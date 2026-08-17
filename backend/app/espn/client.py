@@ -69,6 +69,13 @@ class PlayerRecord:
     rookie: bool = False
     #: {stat_id_as_str: projected season total}
     raw_stats: dict[str, float] = field(default_factory=dict)
+    #: {week: {stat_id_as_str: projected total for that week}}
+    weekly_stats: dict[int, dict[str, float]] = field(default_factory=dict)
+    #: {week: ESPN's own applied total for that week}
+    weekly_points: dict[int, float] = field(default_factory=dict)
+    #: FREEAGENT / WAIVERS / ONTEAM
+    availability: str = ""
+    on_team_id: int | None = None
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -442,28 +449,50 @@ class EspnClient:
         self._bye_weeks = byes
         return byes
 
-    def player_pool(self, limit: int = 600, ppr: bool = False) -> list[PlayerRecord]:
-        """The draftable player pool with raw projected stat totals.
+    @property
+    def current_week(self) -> int:
+        """The scoring period ESPN considers current. 1 before the season opens."""
+        league = self.connect()
+        return max(int(getattr(league, "current_week", 1) or 1), 1)
+
+    def player_pool(
+        self,
+        limit: int = 600,
+        ppr: bool = False,
+        week: int | None = None,
+        free_agents_only: bool = False,
+    ) -> list[PlayerRecord]:
+        """The player pool with raw projected stat totals.
 
         One `kona_player_info` request against the league endpoint.  Because it
         goes through the *league*, ESPN also returns `appliedTotal` already
         scored under this league's rules -- we keep that as a cross-check
         alongside the projection we compute ourselves.
+
+        `week` asks ESPN for that scoring period, which makes the weekly splits
+        appear in the payload; `free_agents_only` narrows to the waiver wire.
         """
         league = self.connect()
         rank_type = "PPR" if ppr else "STANDARD"
 
-        filters = {
-            "players": {
-                "limit": int(limit),
-                "sortDraftRanks": {
-                    "sortPriority": 100,
-                    "sortAsc": True,
-                    "value": rank_type,
-                },
-            }
+        player_filter: dict = {
+            "limit": int(limit),
+            "sortDraftRanks": {
+                "sortPriority": 100,
+                "sortAsc": True,
+                "value": rank_type,
+            },
         }
-        params = {"view": "kona_player_info", "scoringPeriodId": 0}
+        if free_agents_only:
+            player_filter["filterStatus"] = {"value": ["FREEAGENT", "WAIVERS"]}
+            # Waiver value tracks demand, so lead with what the market wants.
+            player_filter["sortPercOwned"] = {"sortPriority": 1, "sortAsc": False}
+
+        filters = {"players": player_filter}
+        params = {
+            "view": "kona_player_info",
+            "scoringPeriodId": int(week) if week else 0,
+        }
         headers = {"x-fantasy-filter": json.dumps(filters)}
 
         try:
@@ -473,6 +502,8 @@ class EspnClient:
 
         entries = data.get("players") or []
         if not entries:
+            if free_agents_only:
+                return []      # a picked-clean wire is a valid answer, not an error
             raise EspnConnectionError(
                 "ESPN returned an empty player pool. The season may not be open yet."
             )
@@ -521,6 +552,7 @@ class EspnClient:
         espn_rank = _i(rank_entry.get("rank"))
 
         raw_stats, applied_total, projected_games = self._season_projection(player)
+        weekly_stats, weekly_points = self._weekly_projections(player)
 
         injury_status = (player.get("injuryStatus") or "ACTIVE").upper()
 
@@ -544,7 +576,39 @@ class EspnClient:
             espn_projected_points=round(applied_total, 2),
             rookie=25 in (player.get("eligibleSlots") or []),
             raw_stats=raw_stats,
+            weekly_stats=weekly_stats,
+            weekly_points=weekly_points,
+            availability=(entry.get("status") or "").upper(),
+            on_team_id=_i(entry.get("onTeamId")),
         )
+
+    def _weekly_projections(
+        self, player: dict
+    ) -> tuple[dict[int, dict[str, float]], dict[int, float]]:
+        """Per-week projections, pulled from the payload we already have.
+
+        ESPN returns weekly splits alongside the season total in the same
+        `stats` array -- a weekly entry has `statSplitTypeId == 1` and a real
+        `scoringPeriodId`. Extracting them here means in-season features cost
+        no additional requests.
+        """
+        stats_by_week: dict[int, dict[str, float]] = {}
+        points_by_week: dict[int, float] = {}
+
+        for stats in player.get("stats") or []:
+            if _i(stats.get("statSourceId"), -1) != 1:
+                continue          # actuals, not projections
+            if _i(stats.get("seasonId"), -1) != self.season:
+                continue
+            if _i(stats.get("statSplitTypeId"), -1) != 1:
+                continue          # season totals are handled separately
+            week = _i(stats.get("scoringPeriodId"), 0) or 0
+            if week <= 0:
+                continue
+            stats_by_week[week] = {str(k): _f(v) for k, v in (stats.get("stats") or {}).items()}
+            points_by_week[week] = round(_f(stats.get("appliedTotal"), 0.0), 2)
+
+        return (stats_by_week, points_by_week)
 
     def _season_projection(self, player: dict) -> tuple[dict[str, float], float, float]:
         """Pull the full-season projection: raw stat totals + ESPN's applied total.

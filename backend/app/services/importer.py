@@ -21,6 +21,7 @@ from ..models import (
     LeagueTeam,
     Player,
     PlayerProjection,
+    PlayerWeeklyProjection,
     ProjectionSource,
     ScoringRule,
     utcnow,
@@ -291,6 +292,10 @@ def import_players(
         (proj.player_id, proj.source_key): proj
         for proj in session.scalars(select(PlayerProjection)).all()
     }
+    weekly = {
+        (row.player_id, row.source_key, row.week): row
+        for row in session.scalars(select(PlayerWeeklyProjection)).all()
+    }
 
     now = datetime.now(timezone.utc)
     imported = 0
@@ -322,6 +327,8 @@ def import_players(
         player.espn_position_rank = record.espn_position_rank
         player.espn_projected_points = record.espn_projected_points
         player.rookie = record.rookie
+        player.availability = record.availability or player.availability
+        player.on_team_id = record.on_team_id
         player.updated_at = now
 
         if player.id is None:
@@ -337,12 +344,118 @@ def import_players(
         projection.projected_games = record.projected_games
         projection.updated_at = now
 
+        _store_weekly(session, weekly, player, source_key, record, now)
+
         imported += 1
 
     _assign_position_adp(session, league.season)
     session.commit()
     log.info("Imported %s players for season %s", imported, league.season)
     return imported
+
+
+def _store_weekly(
+    session: Session,
+    weekly: dict,
+    player: Player,
+    source_key: str,
+    record,
+    now: datetime,
+) -> None:
+    """Upsert this player's per-week projections."""
+    for week, stats in (record.weekly_stats or {}).items():
+        key = (player.id, source_key, int(week))
+        row = weekly.get(key)
+        if row is None:
+            row = PlayerWeeklyProjection(
+                player_id=player.id, source_key=source_key, week=int(week)
+            )
+            session.add(row)
+            weekly[key] = row
+        row.raw_stats = stats
+        row.source_points = (record.weekly_points or {}).get(week)
+        row.updated_at = now
+
+
+def import_free_agents(
+    session: Session,
+    league: League,
+    provider: DataProvider | None = None,
+    settings: Settings | None = None,
+    week: int | None = None,
+    limit: int = 300,
+) -> int:
+    """Refresh the waiver wire.
+
+    Free agents move constantly in-season, so this is a separate, cheaper call
+    than a full player import.
+    """
+    settings = settings or get_settings()
+    provider = provider or build_provider(settings)
+    source_key = getattr(provider, "source", "espn")
+    week = week or provider.current_week
+
+    records = provider.player_pool(
+        limit=limit, ppr=league.is_ppr, week=week, free_agents_only=True
+    )
+    if not records:
+        return 0
+
+    existing = {
+        p.espn_player_id: p
+        for p in session.scalars(select(Player).where(Player.season == league.season)).all()
+    }
+    projections = {
+        (proj.player_id, proj.source_key): proj
+        for proj in session.scalars(select(PlayerProjection)).all()
+    }
+    weekly = {
+        (row.player_id, row.source_key, row.week): row
+        for row in session.scalars(select(PlayerWeeklyProjection)).all()
+    }
+
+    now = datetime.now(timezone.utc)
+    for record in records:
+        player = existing.get(record.espn_player_id)
+        if player is None:
+            player = Player(
+                season=league.season,
+                espn_player_id=record.espn_player_id,
+                name=record.name,
+                position=record.position,
+            )
+            session.add(player)
+            existing[record.espn_player_id] = player
+            session.flush()
+
+        player.name = record.name
+        player.position = record.position
+        player.pro_team = record.pro_team
+        player.eligible_slots = record.eligible_slots
+        player.bye_week = record.bye_week
+        player.injury_status = record.injury_status
+        player.injured = record.injured
+        player.percent_owned = record.percent_owned
+        player.percent_started = record.percent_started
+        player.availability = record.availability or "FREEAGENT"
+        player.on_team_id = record.on_team_id
+        player.updated_at = now
+
+        if record.raw_stats:
+            projection = projections.get((player.id, source_key))
+            if projection is None:
+                projection = PlayerProjection(player_id=player.id, source_key=source_key)
+                session.add(projection)
+                projections[(player.id, source_key)] = projection
+            projection.raw_stats = record.raw_stats
+            projection.source_points = record.espn_projected_points
+            projection.updated_at = now
+
+        _store_weekly(session, weekly, player, source_key, record, now)
+
+    session.commit()
+    log.info("Refreshed %s free agents for week %s", len(records), week)
+    return len(records)
 
 
 def _assign_position_adp(session: Session, season: int) -> None:

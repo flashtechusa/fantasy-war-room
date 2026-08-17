@@ -23,9 +23,18 @@ class DataProvider(Protocol):
 
     def draft_results(self) -> list[dict]: ...
 
-    def player_pool(self, limit: int = 600, ppr: bool = False) -> list[PlayerRecord]: ...
+    def player_pool(
+        self,
+        limit: int = 600,
+        ppr: bool = False,
+        week: int | None = None,
+        free_agents_only: bool = False,
+    ) -> list[PlayerRecord]: ...
 
     def previous_draft_results(self) -> dict[int, list[dict]]: ...
+
+    @property
+    def current_week(self) -> int: ...
 
 
 class DemoProvider:
@@ -46,13 +55,26 @@ class DemoProvider:
     def draft_results(self) -> list[dict]:
         return []
 
-    def player_pool(self, limit: int = 600, ppr: bool = False) -> list[PlayerRecord]:
+    def player_pool(
+        self,
+        limit: int = 600,
+        ppr: bool = False,
+        week: int | None = None,
+        free_agents_only: bool = False,
+    ) -> list[PlayerRecord]:
         if self._pool is None:
             self._pool = demo.demo_player_pool(self.season)
-        return self._pool[:limit]
+        pool = self._pool
+        if free_agents_only:
+            pool = [p for p in pool if p.availability in {"FREEAGENT", "WAIVERS"}]
+        return pool[:limit]
 
     def previous_draft_results(self) -> dict[int, list[dict]]:
         return {self.season - 1: demo.demo_previous_draft(self.season - 1, self.player_pool(400))}
+
+    @property
+    def current_week(self) -> int:
+        return demo.DEMO_CURRENT_WEEK
 
 
 class EspnProvider:
@@ -72,11 +94,23 @@ class EspnProvider:
     def draft_results(self) -> list[dict]:
         return self.client.draft_results()
 
-    def player_pool(self, limit: int = 600, ppr: bool = False) -> list[PlayerRecord]:
-        return self.client.player_pool(limit=limit, ppr=ppr)
+    def player_pool(
+        self,
+        limit: int = 600,
+        ppr: bool = False,
+        week: int | None = None,
+        free_agents_only: bool = False,
+    ) -> list[PlayerRecord]:
+        return self.client.player_pool(
+            limit=limit, ppr=ppr, week=week, free_agents_only=free_agents_only
+        )
 
     def previous_draft_results(self) -> dict[int, list[dict]]:
         return self.client.previous_draft_results()
+
+    @property
+    def current_week(self) -> int:
+        return self.client.current_week
 
 
 def build_provider(settings: Settings | None = None) -> DataProvider:

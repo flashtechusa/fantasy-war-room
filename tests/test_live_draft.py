@@ -173,13 +173,20 @@ class TestStateRecalculation:
     def test_needs_update_as_i_draft(self, drafting):
         before = drafting.get("/api/team").json()["remaining_needs"]
         before_rb = next(n for n in before if n["position"] == "RB")
+        assert before_rb["starters_filled"] == 0
 
-        rb = board_top(drafting, position="RB")[0]
+        # Take the highest-projecting RB, which is what moves the marginal
+        # value -- the top RB by Draft Score isn't necessarily that player.
+        candidates = drafting.get(
+            "/api/players", params={"position": "RB", "limit": 20}
+        ).json()["players"]
+        rb = max(candidates, key=lambda p: p["projected_points"])
         drafting.post("/api/draft/pick",
                       json={"espn_player_id": rb["espn_player_id"], "overall_pick": 1})
 
         after = drafting.get("/api/team").json()["remaining_needs"]
         after_rb = next(n for n in after if n["position"] == "RB")
+        assert after_rb["starters_filled"] == 1
         assert after_rb["marginal_value"] < before_rb["marginal_value"]
 
     def test_availability_tightens_as_our_next_pick_approaches(self, drafting):

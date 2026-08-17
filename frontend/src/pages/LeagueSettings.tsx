@@ -214,6 +214,17 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
         }}
       />
 
+      <Card title="Draft tools">
+        <div className="small muted" style={{ marginBottom: 9 }}>
+          For draft day. The weekly tools live in the other tabs.
+        </div>
+        <div className="row wrap" style={{ gap: 8 }}>
+          <a className="btn sm" href="/board">Draft board</a>
+          <a className="btn sm" href="/live">Live draft</a>
+          <a className="btn sm" href="/simulate">Simulator</a>
+        </div>
+      </Card>
+
       <Card title="Connection">
         {health.loading ? (
           <Loading what="status" />

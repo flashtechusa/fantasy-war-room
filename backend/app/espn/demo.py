@@ -17,6 +17,10 @@ from .client import PlayerRecord
 
 DEMO_LEAGUE_ID = 999999
 DEMO_TEAM_COUNT = 12
+#: The demo league is mid-season so the weekly screens have something to show.
+DEMO_CURRENT_WEEK = 5
+#: Weeks of per-game projections the demo generates.
+DEMO_WEEKS = range(1, 18)
 
 _FIRST_NAMES = [
     "Marcus", "Jalen", "Trevon", "Deshaun", "Cameron", "Elijah", "Damari", "Isaiah",
@@ -180,6 +184,24 @@ def demo_player_pool(season: int = 2026, seed: int = 20260101) -> list[PlayerRec
                 team = _PRO_TEAMS[(player_id + rank) % len(_PRO_TEAMS)]
                 name = _name_for(player_id - 100000, rng, used_names)
 
+            bye = 5 + ((player_id + rank) % 10)
+
+            # Per-week projections: the season line spread over the games he
+            # plays, with week-to-week noise and a zero on the bye.
+            weekly_stats: dict[int, dict[str, float]] = {}
+            weekly_points: dict[int, float] = {}
+            games = len([w for w in DEMO_WEEKS if w != bye])
+            for week in DEMO_WEEKS:
+                if week == bye:
+                    weekly_stats[week] = {}
+                    weekly_points[week] = 0.0
+                    continue
+                noise = rng.uniform(0.72, 1.31)
+                weekly_stats[week] = {
+                    k: round(v / games * noise, 2) for k, v in raw.items()
+                }
+                weekly_points[week] = round(_score(weekly_stats[week]), 2)
+
             injury_roll = rng.random()
             if injury_roll > 0.965:
                 injury, injured = "OUT", True
@@ -199,7 +221,7 @@ def demo_player_pool(season: int = 2026, seed: int = 20260101) -> list[PlayerRec
                     eligible_slots=(
                         [position, "FLEX"] if position in {"RB", "WR", "TE"} else [position]
                     ),
-                    bye_week=5 + ((player_id + rank) % 10),
+                    bye_week=bye,
                     projected_games=projected_games,
                     injury_status=injury,
                     injured=injured,
@@ -211,12 +233,24 @@ def demo_player_pool(season: int = 2026, seed: int = 20260101) -> list[PlayerRec
                     espn_projected_points=round(_score(raw), 2),
                     rookie=rng.random() > 0.88,
                     raw_stats={k: float(v) for k, v in raw.items()},
+                    weekly_stats=weekly_stats,
+                    weekly_points=weekly_points,
                 )
             )
 
     records.sort(key=lambda r: r.adp or 999)
     for idx, record in enumerate(records, start=1):
         record.espn_rank = idx
+
+    # Mark roughly the top N as rostered so the rest form a realistic waiver
+    # wire -- otherwise every star would show up as a free agent.
+    rostered = DEMO_TEAM_COUNT * 15
+    for idx, record in enumerate(records):
+        if idx < rostered:
+            record.availability = "ONTEAM"
+            record.on_team_id = (idx % DEMO_TEAM_COUNT) + 1
+        else:
+            record.availability = "FREEAGENT"
     return records
 
 

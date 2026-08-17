@@ -336,6 +336,91 @@ export interface SimulationResponse {
   }[]
 }
 
+export interface WeekPlayer {
+  espn_player_id: number
+  name: string
+  position: string
+  pro_team: string
+  week_points: number
+  season_points: number
+  vor: number
+  bye_week: number | null
+  injury_status: string
+  percent_owned: number
+  on_bye: boolean
+  week_projection_is_real: boolean
+}
+
+export interface LineupResponse {
+  week: number
+  projected_points: number
+  points_vs_naive: number
+  starters: {
+    slot: string
+    player: WeekPlayer | null
+    next_best: WeekPlayer | null
+    margin: number
+    close_call: boolean
+    warning: string
+    reason: string
+  }[]
+  bench: WeekPlayer[]
+  warnings: string[]
+  close_calls: { slot: string; starting: string | null; over: string | null; margin: number }[]
+  unfilled_slots: string[]
+  estimated_projections: string[]
+}
+
+export interface WaiverResponse {
+  week: number
+  roster_size: number
+  roster_is_full: boolean
+  free_agents_considered: number
+  uses_faab: boolean
+  faab_budget: number
+  targets: {
+    player: WeekPlayer
+    week_gain: number
+    season_gain: number
+    drop: WeekPlayer | null
+    priority: number
+    faab_bid: number
+    faab_pct: number
+    verdict: string
+    reasons: string[]
+  }[]
+}
+
+export interface TradeSide {
+  label: string
+  gives: WeekPlayer[]
+  gets: WeekPlayer[]
+  week_before: number
+  week_after: number
+  season_before: number
+  season_after: number
+  week_delta: number
+  season_delta: number
+  roster_change: number
+  position_changes: Record<string, number>
+  notes: string[]
+}
+
+export interface TradeResponse {
+  week: number
+  verdict: string
+  summary: string
+  reasons: string[]
+  my_side: TradeSide
+  their_side: TradeSide | null
+}
+
+export interface SeasonRoster {
+  week: number
+  players: WeekPlayer[]
+  teams: { espn_team_id: number; name: string; is_mine: boolean }[]
+}
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -447,6 +532,27 @@ export const api = {
     ),
 
   team: () => request<TeamResponse>('/api/team'),
+
+  lineup: (week?: number) =>
+    request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),
+  waivers: (week?: number, limit = 15) => {
+    const query = new URLSearchParams({ limit: String(limit) })
+    if (week) query.set('week', String(week))
+    return request<WaiverResponse>(`/api/season/waivers?${query.toString()}`)
+  },
+  refreshWaivers: (week?: number) =>
+    request<{ free_agents_imported: number }>(
+      `/api/season/waivers/refresh${week ? `?week=${week}` : ''}`,
+      { method: 'POST' },
+    ),
+  seasonRoster: (week?: number) =>
+    request<SeasonRoster>(`/api/season/roster${week ? `?week=${week}` : ''}`),
+  analyseTrade: (body: {
+    give: number[]
+    receive: number[]
+    their_team_id?: number | null
+    week?: number | null
+  }) => request<TradeResponse>('/api/season/trade', { method: 'POST', body: JSON.stringify(body) }),
 
   simulate: (body: { my_slot?: number; simulations?: number; seed?: number }) =>
     request<SimulationResponse>('/api/simulate', {

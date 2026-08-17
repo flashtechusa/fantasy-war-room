@@ -222,9 +222,17 @@ class Player(Base):
     espn_projected_points: Mapped[float] = mapped_column(Float, default=0.0)
 
     rookie: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    #: ESPN roster status: FREEAGENT / WAIVERS / ONTEAM. Drives the waiver wire.
+    availability: Mapped[str] = mapped_column(String(20), default="", index=True)
+    on_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     projections: Mapped[list["PlayerProjection"]] = relationship(
+        back_populates="player", cascade="all, delete-orphan"
+    )
+    weekly_projections: Mapped[list["PlayerWeeklyProjection"]] = relationship(
         back_populates="player", cascade="all, delete-orphan"
     )
 
@@ -245,6 +253,35 @@ class ProjectionSource(Base):
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PlayerWeeklyProjection(Base):
+    """Per-week raw stat projection.
+
+    Weekly numbers are what every in-season decision runs on -- a season total
+    can't tell you who to start when one of them is on bye. ESPN ships these in
+    the same payload as the season projection (they're just a different stat
+    split), so this costs no extra requests.
+
+    Stored raw, like the season projection, so it can be re-scored under any
+    league's rules.
+    """
+
+    __tablename__ = "player_weekly_projections"
+    __table_args__ = (
+        UniqueConstraint("player_id", "source_key", "week", name="uq_weekly_projection"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), index=True)
+    source_key: Mapped[str] = mapped_column(String(50), index=True)
+    week: Mapped[int] = mapped_column(Integer, index=True)
+
+    raw_stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_points: Mapped[float | None] = mapped_column(Float, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    player: Mapped["Player"] = relationship(back_populates="weekly_projections")
 
 
 class PlayerProjection(Base):

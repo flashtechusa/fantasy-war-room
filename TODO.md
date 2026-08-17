@@ -100,28 +100,44 @@ Specific things most likely to need adjustment against real data:
 
 ---
 
-## Phase 8 — season tools (architected, not built)
+## Phase 8 — season tools
 
-The data model and service layer were built with these in mind — `LeagueTeam.roster`,
-`HistoricalDraftPick`, the projection-source registry and the lineup optimiser are
-all reusable — but none of the following is implemented:
+Built and tested:
 
-- [ ] Start/sit optimizer (the lineup optimiser in `roster.py` is the core of it;
-      needs weekly rather than season projections)
-- [ ] Waiver wire recommendations and free-agent rankings (`League.free_agents()`
-      in espn-api is the data source; VOR machinery already applies)
-- [ ] Trade analyzer (needs a two-sided lineup-delta comparison)
-- [ ] Weekly opponent analysis
-- [ ] Power rankings (espn-api exposes a two-step dominance implementation)
+- [x] Start/sit optimizer — optimal weekly lineup with per-slot reasoning,
+      bye/injury handling and close-call flagging
+- [x] Waiver wire recommendations — free agents ranked by marginal lineup
+      value, with drop candidates and FAAB bid guidance from your own budget
+- [x] Trade analyzer — two-sided lineup delta over this week and rest-of-season,
+      with positional-thinning warnings
+
+Still open:
+
+- [ ] Free-agent rankings as a standalone board (the waiver screen covers the
+      actionable subset — everything that improves your lineup — but there is no
+      plain "best available at each position" list)
+- [ ] Weekly opponent analysis (needs the matchup schedule, which is imported
+      but unused)
+- [ ] Power rankings (espn-api ships a two-step dominance implementation)
 - [ ] Playoff probability (Monte Carlo over the remaining schedule)
 - [ ] Roster-strength comparison across the league
 - [ ] League transaction history browser
 - [ ] Owner tendencies (from draft history + transactions)
 
-Weekly projections are the main missing input for most of these — the current
-importer stores season totals only.
+Caveats on what was built:
 
----
+- [ ] **Weekly projections come from ESPN's own weekly splits.** When ESPN
+      hasn't published one for a week, the season total is spread evenly and the
+      player is listed under "Estimated numbers" on the Week screen. Those are
+      rough — don't make a close start/sit call on one.
+- [ ] **No matchup adjustment.** A running back facing the league's worst run
+      defense gets the same projection as one facing the best. ESPN's weekly
+      numbers bake in some of this, but the app adds nothing on top.
+- [ ] **FAAB guidance is a heuristic**, scaled from the size of the upgrade and
+      your league's budget (`FAAB_POINTS_PER_PERCENT` in `engine/waivers.py`).
+      It has not been calibrated against real auction results.
+- [ ] Waivers consider one drop candidate (the worst droppable player), not the
+      best add/drop pair across the whole roster.
 
 ## Application
 
