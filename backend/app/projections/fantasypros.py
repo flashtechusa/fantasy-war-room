@@ -12,11 +12,12 @@ deliberately discards FantasyPros' own point totals: those are scored under
 their assumed rules, and re-scoring raw stats under the league's actual rules
 is the whole point of this application.
 
-**Untested against the live API.** The response shape below is written from
-their documented schema, and the parser is defensive about it -- unknown keys
-are ignored, missing keys default to zero, and a shape it cannot read is
-reported rather than silently producing empty projections. Verify against a
-real key before trusting the numbers.
+The stat map is taken from a real response rather than their documentation.
+An earlier version guessed the names from the docs and got most of them wrong
+(`rush_td` for `rush_tds`, `rec` for `rec_rec`), which meant every player
+matched and every stat line came back empty while the import reported success.
+The parser stays defensive -- unknown keys are ignored, and a shape it cannot
+read returns nothing rather than silently producing empty projections.
 """
 
 from __future__ import annotations
@@ -33,42 +34,86 @@ log = logging.getLogger(__name__)
 API_ROOT = "https://api.fantasypros.com/public/v2/json/nfl"
 SOURCE_KEY = "fantasypros"
 
-#: FantasyPros stat name -> ESPN stat id. Only stats that map cleanly onto a
-#: scoring rule are carried; anything else is dropped rather than guessed at.
+#: FantasyPros stat name -> ESPN stat id.
+#:
+#: Taken from a real response, not their docs. Their names are plural
+#: (`rush_tds`, `rec_tds`) and receptions are `rec_rec`, which an earlier
+#: guess got wrong -- with the result that every player matched and every
+#: stat line came back empty, while the import reported success. Singular
+#: spellings are kept alongside in case other positions differ; an unknown
+#: name is ignored rather than guessed at.
 STAT_MAP: dict[str, int] = {
     # Passing
     "pass_yds": 3,
+    "pass_tds": 4,
     "pass_td": 4,
     "pass_int": 20,
+    "pass_ints": 20,
     "pass_att": 0,
     "pass_cmp": 1,
     "pass_2pt": 19,
+    "pass_2pts": 19,
     # Rushing
     "rush_yds": 24,
+    "rush_tds": 25,
     "rush_td": 25,
     "rush_2pt": 26,
-    # Receiving
-    "rec_yds": 42,
-    "rec_td": 43,
+    # Receiving -- `rec_rec` is the reception count, not `rec`.
+    "rec_rec": 53,
     "rec": 53,
+    "rec_yds": 42,
+    "rec_tds": 43,
+    "rec_td": 43,
     "rec_2pt": 44,
-    # Misc
+    # Misc. FantasyPros projects `fumbles` as fumbles lost.
+    "fumbles": 72,
     "fumbles_lost": 72,
     "fum_lost": 72,
+    "ret_tds": 105,
     # Kicking
     "fg": 80,
+    "fgs": 80,
     "fg_miss": 85,
     "xpt": 86,
+    "xpts": 86,
     "xpt_miss": 88,
     # Defence / special teams
     "sack": 99,
+    "sacks": 99,
     "int": 95,
+    "ints": 95,
     "fum_rec": 96,
+    "fum_recs": 96,
     "def_td": 94,
+    "def_tds": 94,
     "safety": 98,
+    "safeties": 98,
     "pts_agn": 120,
+    "pts_vs": 120,
     "yds_agn": 127,
+    "yds_vs": 127,
 }
+
+#: Their own point totals, under their assumed rules. Deliberately never
+#: stored -- re-scoring raw stats under the league's rules is the point -- but
+#: named here so they are recognisably excluded rather than accidentally
+#: swept up as a stat.
+IGNORED_KEYS = frozenset(
+    {
+        "points",
+        "points_ppr",
+        "points_half",
+        "rush_yds_100",
+        "rush_yds_200",
+        "rec_yds_100",
+        "rec_yds_200",
+        "scrimage_yards_100",
+        "scrimage_yards_200",
+        # Combined two-point total: ESPN scores passing, rushing and receiving
+        # conversions separately, so this cannot be attributed to one of them.
+        "2pt_tds",
+    }
+)
 
 POSITIONS = ("QB", "RB", "WR", "TE", "K", "DST")
 

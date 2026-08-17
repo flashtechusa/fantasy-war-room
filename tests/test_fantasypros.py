@@ -206,3 +206,95 @@ class TestKeyIsActuallyStored:
         client.put("/api/config", json={"fantasypros_api_key": "abc123"})
         client.put("/api/config", json={"fantasypros_api_key": ""})
         assert client.get("/api/config").json()["fantasypros_key_set"] is False
+
+
+class TestRealResponseShape:
+    """Parsed from an actual API response, not their documentation.
+
+    The first version of the stat map was written from the docs and had the
+    wrong names for nearly every stat. Players matched, stat lines came back
+    empty, and the import reported success -- the worst possible failure mode.
+    This fixture is a verbatim slice of a real 2026 response.
+    """
+
+    PAYLOAD = {
+        "season": "2026",
+        "week": "0",
+        "count": "132",
+        "positions": "RB",
+        "scoring": "STD",
+        "players": [
+            {
+                "fpid": 22968,
+                "mflid": 16162,
+                "name": "Jahmyr Gibbs",
+                "position_id": "RB",
+                "team_id": "DET",
+                "filename": "jahmyr-gibbs.php",
+                "stats": {
+                    "points": 301.77,
+                    "points_ppr": 373.04,
+                    "points_half": 337.41,
+                    "rush_att": 274.73,
+                    "rush_yds": 1382.03,
+                    "rush_tds": 13.83,
+                    "rush_yds_100": 0,
+                    "rush_yds_200": 0,
+                    "scrimage_yards_100": 0,
+                    "scrimage_yards_200": 0,
+                    "rec_rec": 71.27,
+                    "rec_yds": 581.1,
+                    "rec_tds": 4.13,
+                    "rec_yds_100": 0,
+                    "rec_yds_200": 0,
+                    "fumbles": 1.13,
+                    "ret_tds": 0,
+                    "2pt_tds": 0,
+                },
+            }
+        ],
+    }
+
+    def _gibbs(self):
+        players = parse_projections(self.PAYLOAD)
+        assert len(players) == 1
+        return players[0]
+
+    def test_the_player_is_identified(self):
+        gibbs = self._gibbs()
+        assert gibbs.name == "Jahmyr Gibbs"
+        assert gibbs.position == "RB"
+        assert gibbs.pro_team == "DET"
+
+    def test_rushing_stats_land_on_the_right_ids(self):
+        stats = self._gibbs().raw_stats
+        assert stats["24"] == 1382.03    # rushing yards
+        assert stats["25"] == 13.83      # rushing TDs
+
+    def test_receptions_use_rec_rec_not_rec(self):
+        """The specific mistake: `rec` does not exist in their payload."""
+        assert self._gibbs().raw_stats["53"] == 71.27
+
+    def test_receiving_stats_land_on_the_right_ids(self):
+        stats = self._gibbs().raw_stats
+        assert stats["42"] == 581.1      # receiving yards
+        assert stats["43"] == 4.13       # receiving TDs
+
+    def test_fumbles_are_captured(self):
+        assert self._gibbs().raw_stats["72"] == 1.13
+
+    def test_their_point_totals_are_never_stored(self):
+        """points/points_ppr/points_half are scored under their rules."""
+        values = set(self._gibbs().raw_stats.values())
+        assert 301.77 not in values
+        assert 373.04 not in values
+        assert 337.41 not in values
+
+    def test_bonus_thresholds_are_not_mistaken_for_stats(self):
+        stats = self._gibbs().raw_stats
+        # Every stored key must be a real ESPN stat id we mapped deliberately.
+        assert all(key.isdigit() for key in stats)
+
+    def test_a_real_line_produces_a_usable_number_of_stats(self):
+        """The failure being guarded against was an empty stat line."""
+        assert len(self._gibbs().raw_stats) >= 5
