@@ -46,6 +46,16 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FWR_ESPN_S2", "ESPN_S2", "ESPN_COOKIE_S2"),
     )
 
+    # --- Additional projection sources ------------------------------------
+    #: Bring your own key. Nothing is bundled, and the FantasyPros source stays
+    #: inert until this is set. Free keys are issued for personal,
+    #: non-commercial use, so whether a deployment may use it is a question for
+    #: whoever holds the key -- hence per-install and off by default.
+    fantasypros_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_FANTASYPROS_API_KEY", "FANTASYPROS_API_KEY"),
+    )
+
     # --- Draft ------------------------------------------------------------
     my_team_id: int | None = None
     my_team_name: str | None = None

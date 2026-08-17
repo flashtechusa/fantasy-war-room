@@ -1,0 +1,174 @@
+"""FantasyPros as a second projection source.
+
+Untested against the live API -- no key here, and the network path is blocked
+in this environment -- so these exercise the parser and the matcher against
+captured-shape fixtures. Those are the parts that can silently corrupt data;
+the HTTP call either works or raises.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.projections.fantasypros import parse_projections
+from app.projections.matching import (
+    Candidate,
+    PlayerMatcher,
+    defence_key,
+    normalise_name,
+    normalise_team,
+)
+
+
+class TestNameNormalisation:
+    @pytest.mark.parametrize(
+        "left,right",
+        [
+            ("Kenneth Walker III", "Kenneth Walker"),
+            ("T.J. Hockenson", "TJ Hockenson"),
+            ("Marvin Harrison Jr.", "Marvin Harrison"),
+            ("Amon-Ra St. Brown", "AmonRa St Brown"),
+            ("D'Andre Swift", "DAndre Swift"),
+            ("  Justin   Herbert ", "Justin Herbert"),
+        ],
+    )
+    def test_spelling_differences_collapse(self, left, right):
+        assert normalise_name(left) == normalise_name(right)
+
+    def test_different_people_do_not_collapse(self):
+        assert normalise_name("Michael Thomas") != normalise_name("Michael Pittman")
+
+    def test_empty_input_is_safe(self):
+        assert normalise_name(None) == ""
+        assert normalise_name("") == ""
+
+
+class TestTeamNormalisation:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("JAC", "JAX"), ("WSH", "WAS"), ("LAR", "LA"), ("OAK", "LV"), ("KC", "KC")],
+    )
+    def test_provider_abbreviations_are_reconciled(self, raw, expected):
+        assert normalise_team(raw) == expected
+
+    def test_case_and_punctuation_are_ignored(self):
+        assert normalise_team("jax") == "JAX"
+
+
+class TestDefenceMatching:
+    def test_defence_naming_variants_collapse(self):
+        assert defence_key("Jaguars D/ST") == defence_key("Jaguars DST")
+        assert defence_key("Broncos Defense") == defence_key("Broncos")
+
+
+class TestPlayerMatcher:
+    def _matcher(self) -> PlayerMatcher:
+        return PlayerMatcher(
+            [
+                Candidate(1, "Kenneth Walker III", "RB", "SEA"),
+                Candidate(2, "Justin Herbert", "QB", "LAC"),
+                Candidate(3, "Michael Thomas", "WR", "NO"),
+                Candidate(4, "Michael Thomas", "WR", "BUF"),
+                Candidate(5, "Jaguars D/ST", "DST", "JAX"),
+            ]
+        )
+
+    def test_it_matches_across_a_name_variant(self):
+        assert self._matcher().match("Kenneth Walker", "RB", "SEA").player_id == 1
+
+    def test_it_matches_across_a_team_abbreviation_variant(self):
+        assert self._matcher().match("Jaguars DST", "DST", "JAC").player_id == 5
+
+    def test_a_team_change_does_not_block_a_match(self):
+        """Providers update transactions at different times."""
+        assert self._matcher().match("Justin Herbert", "QB", "DEN").player_id == 2
+
+    def test_position_disagreement_is_not_a_match(self):
+        assert self._matcher().match("Justin Herbert", "RB", "LAC") is None
+
+    def test_a_duplicate_name_resolves_by_team(self):
+        assert self._matcher().match("Michael Thomas", "WR", "BUF").player_id == 4
+
+    def test_an_unresolvable_duplicate_is_refused_not_guessed(self):
+        """A wrong match corrupts two players and is undetectable downstream."""
+        matcher = self._matcher()
+        assert matcher.match("Michael Thomas", "WR", "SEA") is None
+        assert matcher.report["ambiguous_count"] == 1
+
+    def test_an_unknown_player_is_reported(self):
+        matcher = self._matcher()
+        assert matcher.match("Nobody At All", "WR", "SEA") is None
+        assert matcher.report["unmatched_count"] == 1
+
+
+class TestParsing:
+    def _payload(self) -> dict:
+        return {
+            "players": [
+                {
+                    "name": "Justin Herbert",
+                    "position_id": "QB",
+                    "team_id": "LAC",
+                    "stats": {
+                        "pass_yds": "4,250",
+                        "pass_td": 28,
+                        "pass_int": 10,
+                        "rush_yds": 250,
+                        "rush_td": 3,
+                        "games": 17,
+                    },
+                },
+                {
+                    "name": "Kenneth Walker III",
+                    "position_id": "RB",
+                    "team_id": "SEA",
+                    "stats": {"rush_yds": 1100, "rush_td": 9, "rec": 40, "rec_yds": 300},
+                },
+            ]
+        }
+
+    def test_stats_are_keyed_by_espn_stat_id(self):
+        players = parse_projections(self._payload())
+        herbert = players[0]
+        assert herbert.raw_stats["3"] == 4250.0     # passing yards
+        assert herbert.raw_stats["4"] == 28.0       # passing TDs
+        assert herbert.raw_stats["20"] == 10.0      # interceptions thrown
+
+    def test_comma_formatted_numbers_are_parsed(self):
+        assert parse_projections(self._payload())[0].raw_stats["3"] == 4250.0
+
+    def test_receptions_map_to_the_ppr_stat(self):
+        walker = parse_projections(self._payload())[1]
+        assert walker.raw_stats["53"] == 40.0
+
+    def test_no_point_total_is_carried_over(self):
+        """Their total is scored under their rules -- re-scoring is the point."""
+        for player in parse_projections(self._payload()):
+            assert not hasattr(player, "source_points")
+
+    def test_games_are_captured_when_present(self):
+        assert parse_projections(self._payload())[0].projected_games == 17.0
+
+    def test_an_unrecognised_shape_returns_nothing_rather_than_guessing(self):
+        assert parse_projections({"unexpected": True}) == []
+
+    def test_alternative_list_keys_are_tolerated(self):
+        payload = {"data": [{"name": "X", "position_id": "WR", "rec": 5}]}
+        assert len(parse_projections(payload)) == 1
+
+    def test_inline_stats_without_a_stats_object_still_parse(self):
+        payload = {"players": [{"name": "Y", "position_id": "WR", "rec_yds": 900}]}
+        assert parse_projections(payload)[0].raw_stats["42"] == 900.0
+
+
+class TestImportEndpoint:
+    def test_it_refuses_politely_without_a_key(self, client):
+        client.post("/api/league/import")
+        response = client.post("/api/league/projections/fantasypros")
+        assert response.status_code == 400
+        assert "key" in response.json()["detail"].lower()
+
+    def test_the_key_is_never_returned_by_the_config_api(self, client):
+        secret = "test-key-do-not-echo"
+        client.put("/api/config", json={"fantasypros_api_key": secret})
+        assert secret not in client.get("/api/config").text

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -13,13 +13,16 @@ from ..config import Settings
 from ..db import get_db
 from ..espn.client import EspnConnectionError
 from ..models import HistoricalDraftPick, League, Player, ProjectionSource
+from ..projections.fantasypros import FantasyProsError
 from ..services import board as board_service
+from ..services import projections as projection_service
 from ..services.importer import import_league, import_players
 from ..services.provider import build_provider
 from .deps import league_dep, settings_dep
 from .serializers import serialize_history, serialize_league
 
 log = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/league", tags=["league"])
 
 
@@ -126,3 +129,35 @@ def read_projection_sources(session: Session = Depends(get_db)) -> dict:
             for source in sources
         ]
     }
+
+
+@router.post("/projections/fantasypros")
+def import_fantasypros_projections(
+    week: str = Query("draft", description="'draft' for season totals, or a week number"),
+    weight: float = Query(1.0, ge=0.0, le=10.0),
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """Pull FantasyPros projections using this installation's own API key.
+
+    Off unless a key is configured. The report includes what failed to match,
+    because a half-matched import looks identical to a working one from the
+    outside and would quietly skew the blend.
+    """
+    try:
+        report = projection_service.import_fantasypros(
+            session,
+            league,
+            api_key=settings.fantasypros_api_key or "",
+            week=int(week) if str(week).isdigit() else "draft",
+            weight=weight,
+        )
+    except FantasyProsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    session.commit()
+    board_service.clear_cache()
+    return report

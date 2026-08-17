@@ -26,10 +26,11 @@ OVERRIDABLE = {
     "my_team_id": int,
     "my_draft_slot": int,
     "faab_remaining": int,
+    "fantasypros_api_key": str,
 }
 
 #: Never returned by the API.
-SECRET_KEYS = {"espn_swid", "espn_s2"}
+SECRET_KEYS = {"espn_swid", "espn_s2", "fantasypros_api_key"}
 
 
 def _coerce(key: str, raw: str):
