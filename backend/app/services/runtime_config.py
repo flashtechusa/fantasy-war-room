@@ -114,6 +114,7 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "faab_remaining": overrides.get("faab_remaining"),
         "swid_set": bool(settings.espn_swid),
         "espn_s2_set": bool(settings.espn_s2),
+        "fantasypros_key_set": bool(settings.fantasypros_api_key),
         "has_private_credentials": settings.has_espn_credentials,
         "ready_for_espn": settings.can_reach_espn,
         "sources": {key: source(key) for key in OVERRIDABLE},

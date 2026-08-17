@@ -156,6 +156,103 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
 }
 
 /**
+ * A second projection source, so everything does not rest on ESPN's numbers.
+ *
+ * Bring your own key: nothing is bundled, and the source stays inert until one
+ * is entered. FantasyPros issue free keys for personal, non-commercial use, so
+ * whether a given install may use this is a question for whoever holds the key.
+ */
+function FantasyProsCard({ onImported }: { onImported: () => void }) {
+  const config = useAsync(() => api.config(), [])
+  const [key, setKey] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const stored = Boolean(config.data?.fantasypros_key_set)
+
+  async function saveKey() {
+    setSaving(true)
+    setResult(null)
+    try {
+      await api.saveConfig({ fantasypros_api_key: key.trim() })
+      setKey('')
+      config.reload()
+      setResult({ ok: true, text: 'Key saved. Import to pull projections.' })
+    } catch (error) {
+      setResult({ ok: false, text: (error as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function runImport() {
+    setImporting(true)
+    setResult(null)
+    try {
+      const report = await api.importFantasyPros()
+      const missed = report.unmatched_count + report.ambiguous_count
+      setResult({
+        ok: report.matched > 0,
+        text:
+          `Matched ${report.matched} of ${report.received} players` +
+          (missed ? `. ${missed} could not be matched and were skipped.` : '.'),
+      })
+      onImported()
+    } catch (error) {
+      setResult({ ok: false, text: (error as Error).message })
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <Card title="FantasyPros projections (optional)">
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        A second opinion alongside ESPN's numbers. Their stat lines get re-scored under
+        your league's rules the same way, so this changes the inputs, not the method.
+      </div>
+
+      <label className="tiny faint">
+        API key {stored && <span className="muted">(stored — leave blank to keep)</span>}
+      </label>
+      <input
+        type="text"
+        autoComplete="off"
+        spellCheck={false}
+        placeholder="Paste your FantasyPros API key"
+        value={key}
+        onChange={(e) => setKey(e.target.value)}
+        style={{ marginBottom: 10 }}
+      />
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn block" onClick={saveKey} disabled={saving || !key.trim()}>
+          {saving ? 'Saving…' : 'Save key'}
+        </button>
+        <button
+          className="btn primary block"
+          onClick={runImport}
+          disabled={importing || !stored}
+        >
+          {importing ? 'Importing…' : 'Import projections'}
+        </button>
+      </div>
+
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        Get a key at api.fantasypros.com. Free keys allow 50 requests a day and an import
+        uses six. The key is stored locally and never sent back to the browser.
+      </div>
+
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * In-app update.
  *
  * The app is usually running somewhere you only have a browser, so shipping a
@@ -386,6 +483,8 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
   return (
     <>
       {message && <Banner kind={message.kind === 'error' ? 'error' : 'info'}>{message.text}</Banner>}
+
+      <FantasyProsCard onImported={() => onChange?.()} />
 
       <EspnConnectionForm
         onSaved={() => {

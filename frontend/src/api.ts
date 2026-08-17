@@ -502,6 +502,7 @@ export interface ConfigInfo {
   faab_remaining: number | null
   swid_set: boolean
   espn_s2_set: boolean
+  fantasypros_key_set: boolean
   has_private_credentials: boolean
   ready_for_espn: boolean
   sources: Record<string, string>
@@ -595,6 +596,17 @@ export const api = {
   team: () => request<TeamResponse>('/api/team'),
 
   leagueTeams: () => request<LeagueTeamsResponse>('/api/team/league'),
+
+  importFantasyPros: () =>
+    request<{
+      source: string
+      received: number
+      matched: number
+      unmatched_count: number
+      ambiguous_count: number
+      unmatched_sample: string[]
+      ambiguous_sample: string[]
+    }>('/api/league/projections/fantasypros', { method: 'POST' }),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),
