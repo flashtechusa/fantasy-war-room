@@ -138,6 +138,13 @@ Caveats on what was built:
       It has not been calibrated against real auction results.
 - [ ] Waivers consider one drop candidate (the worst droppable player), not the
       best add/drop pair across the whole roster.
+- [ ] **No automated transactions.** The app cannot place a waiver claim, submit
+      a FAAB bid, or add/drop for you. `espn-api` is read-only and ESPN has no
+      supported write API; anything that posted transactions would be reverse
+      engineered, fragile, and capable of mangling a real roster. Recommendations
+      are for you to execute in ESPN.
+- [ ] Remaining FAAB is entered by hand on the League screen, because ESPN does
+      not report it reliably per team. It is used to scale bid suggestions.
 
 ## Application
 

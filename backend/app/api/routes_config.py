@@ -31,6 +31,7 @@ class EspnConfigRequest(BaseModel):
     demo_mode: bool | None = None
     my_team_id: int | None = None
     my_draft_slot: int | None = Field(default=None, ge=1, le=32)
+    faab_remaining: int | None = Field(default=None, ge=0, le=100000)
 
 
 @router.get("")

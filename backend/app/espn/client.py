@@ -336,14 +336,21 @@ class EspnClient:
         out: list[dict] = []
         for team in league.teams:
             owners = []
+            owner_ids = []
             for owner in getattr(team, "owners", []) or []:
                 if isinstance(owner, dict):
                     name = " ".join(
                         p for p in [owner.get("firstName"), owner.get("lastName")] if p
                     ).strip()
                     owners.append(name or owner.get("displayName") or "Unknown owner")
+                    # ESPN member ids use the same brace-wrapped GUID format as
+                    # the SWID cookie, which is what lets us auto-detect which
+                    # of these teams is yours.
+                    if owner.get("id"):
+                        owner_ids.append(str(owner["id"]).strip().upper())
                 elif owner:
                     owners.append(str(owner))
+                    owner_ids.append(str(owner).strip().upper())
 
             roster = []
             for player in getattr(team, "roster", []) or []:
@@ -364,6 +371,7 @@ class EspnClient:
                     "name": getattr(team, "team_name", "") or f"Team {team.team_id}",
                     "abbrev": getattr(team, "team_abbrev", "") or "",
                     "owners": owners,
+                    "owner_ids": owner_ids,
                     "logo_url": getattr(team, "logo_url", "") or "",
                     "division_name": getattr(team, "division_name", "") or "",
                     "draft_slot": slot_by_team.get(team.team_id),

@@ -453,6 +453,7 @@ export interface ConfigInfo {
   demo_mode: boolean
   my_team_id: number | null
   my_draft_slot: number | null
+  faab_remaining: number | null
   swid_set: boolean
   espn_s2_set: boolean
   has_private_credentials: boolean

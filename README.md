@@ -189,6 +189,12 @@ FWR_MY_TEAM_NAME="My Team"  # alternative: matches team name or owner name
 FWR_MY_DRAFT_SLOT=5         # your draft position; auto-detected if ESPN publishes the order
 ```
 
+**Which team is yours is usually detected automatically**: ESPN's owner ids are
+the same brace-wrapped GUID as your `SWID` cookie, so a solo-owned team
+identifies itself. Co-owned teams and shared logins need telling — use the
+**My team** picker on the League screen. Until a team is identified, My Team,
+Week, Waivers and Trade are all empty, and the League screen says so.
+
 You can also change your draft slot from the Simulator screen at any time.
 
 ---
@@ -365,6 +371,13 @@ actual budget, and a verdict: `must-add`, `starter`, `streamer`, `stash`, `depth
 Players who improve nothing are omitted rather than padded into a top-20.
 
 Starters and high-VOR bench players are never suggested as drops.
+
+**Bids are scaled to what you have left, not the season budget.** ESPN doesn't
+report remaining FAAB reliably, so enter yours on the **League** screen and the
+suggestions adjust.
+
+**The app never places a claim for you.** It cannot add, drop or bid — `espn-api`
+is read-only and ESPN publishes no write API. You execute the moves in ESPN.
 
 ### Trade
 

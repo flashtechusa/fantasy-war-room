@@ -169,6 +169,7 @@ def waivers(
         shape=shape,
         week=week,
         faab_budget=league.acquisition_budget,
+        faab_remaining=settings.faab_remaining,
         roster_is_full=len(roster) >= shape.roster_size,
         limit=limit,
     )
@@ -180,6 +181,7 @@ def waivers(
         "free_agents_considered": len(free_agents),
         "uses_faab": league.uses_faab,
         "faab_budget": league.acquisition_budget,
+        "faab_remaining": settings.faab_remaining,
         "targets": [
             {
                 "player": _serialize_player(t.player),

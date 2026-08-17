@@ -155,6 +155,116 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
   )
 }
 
+/**
+ * Which team is yours, and how much waiver money you have left.
+ *
+ * Auto-detection matches your SWID cookie against ESPN's owner ids, which
+ * works for a solo-owned team. Co-owned teams and shared logins need to be
+ * told, and every season screen is empty until they are -- so this is a
+ * first-class control, not a hidden setting.
+ */
+function MyTeamPicker() {
+  const config = useAsync(() => api.config(), [])
+  const league = useAsync(() => api.league().catch(() => null), [])
+  const [saving, setSaving] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+  const [faab, setFaab] = useState('')
+
+  const teams = league.data?.teams ?? []
+  const detected = teams.find((t) => t.is_mine)
+  const current = config.data?.my_team_id ?? detected?.espn_team_id ?? ''
+
+  async function save(patch: Record<string, unknown>) {
+    setSaving(true)
+    setNote(null)
+    try {
+      await api.saveConfig(patch)
+      config.reload()
+      // Re-import so team ownership is re-evaluated across the league.
+      await api.importLeague()
+      league.reload()
+      setNote('Saved. Your roster should now appear on the season screens.')
+    } catch (error) {
+      setNote((error as Error).message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (!league.data) return null
+
+  return (
+    <Card title="My team">
+      {detected ? (
+        <div className="small" style={{ marginBottom: 10 }}>
+          Currently <strong>{detected.name}</strong>
+          {detected.roster_size > 0 ? (
+            <span className="muted"> · {detected.roster_size} players</span>
+          ) : (
+            <span style={{ color: 'var(--warn)' }}> · no roster imported</span>
+          )}
+        </div>
+      ) : (
+        <Banner kind="warn">
+          No team is marked as yours, so My Team, Week, Waivers and Trade will all be
+          empty. Pick your team below.
+        </Banner>
+      )}
+
+      <label className="tiny faint">WHICH TEAM IS YOURS</label>
+      <select
+        value={current}
+        disabled={saving}
+        onChange={(event) =>
+          event.target.value && save({ my_team_id: Number(event.target.value) })
+        }
+        style={{ marginBottom: 12 }}
+      >
+        <option value="">Pick your team…</option>
+        {teams.map((team) => (
+          <option key={team.espn_team_id} value={team.espn_team_id}>
+            {team.name}
+            {team.owners.length ? ` — ${team.owners.join(', ')}` : ''}
+          </option>
+        ))}
+      </select>
+
+      <label className="tiny faint">
+        WAIVER BUDGET REMAINING{' '}
+        {config.data?.faab_remaining != null && (
+          <span className="muted">(currently ${config.data.faab_remaining})</span>
+        )}
+      </label>
+      <div className="row" style={{ gap: 8 }}>
+        <input
+          type="number"
+          inputMode="numeric"
+          placeholder={String(league.data.waivers.budget || 100)}
+          value={faab}
+          onChange={(event) => setFaab(event.target.value)}
+        />
+        <button
+          className="btn"
+          disabled={saving || !faab.trim()}
+          onClick={() => save({ faab_remaining: Number(faab.trim()) })}
+        >
+          Save
+        </button>
+      </div>
+      <div className="tiny faint" style={{ marginTop: 6 }}>
+        ESPN doesn't report remaining budget reliably, so enter it here and the waiver
+        bids will be scaled to what you actually have left.
+      </div>
+
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.startsWith('Saved') ? 'info' : 'error'}>{note}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
 export default function LeagueSettings({ onChange }: { onChange?: () => void }) {
   const health = useAsync(() => api.health(), [])
   const league = useAsync(() => api.league().catch(() => null), [])
@@ -213,6 +323,8 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
           onChange?.()
         }}
       />
+
+      <MyTeamPicker />
 
       <Card title="Draft tools">
         <div className="small muted" style={{ marginBottom: 9 }}>

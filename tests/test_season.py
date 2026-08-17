@@ -372,3 +372,120 @@ class TestSeasonApi:
         body = ready.get("/api/season/roster", params={"week": 5}).json()
         assert body["players"]
         assert any(t["is_mine"] for t in body["teams"])
+
+
+class TestMyTeamIdentification:
+    """The bug that made every season screen empty on a real import."""
+
+    def _team_payload(self, **overrides):
+        base = {
+            "espn_team_id": 3,
+            "name": "Gridiron Goblins",
+            "owners": ["Alex Whitfield"],
+            "owner_ids": ["{0899A4A2-0BBB-467C-9A28-CEBC5032330E}"],
+        }
+        base.update(overrides)
+        return base
+
+    def test_swid_identifies_my_team_with_no_configuration(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        settings = Settings(
+            _env_file=None, espn_swid="{0899A4A2-0BBB-467C-9A28-CEBC5032330E}"
+        )
+        assert _is_my_team(self._team_payload(), settings)
+
+    def test_swid_matching_ignores_case_and_missing_braces(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        settings = Settings(_env_file=None, espn_swid="0899a4a2-0bbb-467c-9a28-cebc5032330e")
+        assert _is_my_team(self._team_payload(), settings)
+
+    def test_a_different_owner_is_not_my_team(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        settings = Settings(_env_file=None, espn_swid="{AAAAAAAA-0000-0000-0000-000000000000}")
+        assert not _is_my_team(self._team_payload(), settings)
+
+    def test_explicit_team_id_beats_the_cookie(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        settings = Settings(
+            _env_file=None,
+            espn_swid="{0899A4A2-0BBB-467C-9A28-CEBC5032330E}",
+            my_team_id=9,
+        )
+        assert not _is_my_team(self._team_payload(), settings)
+        assert _is_my_team(self._team_payload(espn_team_id=9, owner_ids=[]), settings)
+
+    def test_team_name_still_works(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        settings = Settings(_env_file=None, my_team_name="gridiron goblins")
+        assert _is_my_team(self._team_payload(owner_ids=[]), settings)
+
+    def test_no_signal_means_no_team(self):
+        from app.config import Settings
+        from app.services.importer import _is_my_team
+
+        assert not _is_my_team(self._team_payload(), Settings(_env_file=None))
+
+
+class TestMyTeamUsesEspnRoster:
+    def test_team_screen_reads_the_espn_roster_not_the_draft_log(self, client):
+        """The reported bug: draft imported fine, My Team showed nobody."""
+        from sqlalchemy import select
+        from app.db import session_scope
+        from app.models import Player
+        from app.services.importer import get_active_league
+
+        client.post("/api/league/import", json={})
+        with session_scope() as session:
+            league = get_active_league(session)
+            players = session.scalars(
+                select(Player).where(Player.season == league.season)
+            ).all()[:12]
+            team = next(t for t in league.teams if t.espn_team_id == 1)
+            team.is_mine = True
+            team.roster = [
+                {"espn_player_id": p.espn_player_id, "name": p.name,
+                 "position": p.position, "slot": "BE", "pro_team": p.pro_team}
+                for p in players
+            ]
+            session.commit()
+
+        body = client.get("/api/team").json()
+        assert body["roster_source"] == "espn"
+        assert body["my_team_identified"] is True
+        assert body["picks_made"] == 12          # not 0, which was the bug
+
+    def test_falls_back_to_draft_picks_before_espn_has_a_roster(self, client):
+        client.post("/api/league/import", json={})
+        player = client.get("/api/players", params={"limit": 1}).json()["players"][0]
+        client.post("/api/draft/pick", json={"espn_player_id": player["espn_player_id"]})
+
+        body = client.get("/api/team").json()
+        assert body["roster_source"] == "draft"
+        assert body["picks_made"] == 1
+
+
+class TestFaabRemaining:
+    def test_bids_scale_to_what_is_left_not_the_full_budget(self, roster, shape):
+        from app.engine.waivers import recommend_waivers
+
+        free_agents = [wp("Great FA", "RB", 18.0, season=240)]
+        full = recommend_waivers(roster, free_agents, shape, 5, faab_budget=100)
+        nearly_spent = recommend_waivers(
+            roster, free_agents, shape, 5, faab_budget=100, faab_remaining=10
+        )
+        assert nearly_spent[0].faab_bid < full[0].faab_bid
+
+    def test_faab_remaining_is_settable_at_runtime(self, client):
+        client.post("/api/league/import", json={})
+        client.put("/api/config", json={"faab_remaining": 37})
+        assert client.get("/api/config").json()["faab_remaining"] == 37

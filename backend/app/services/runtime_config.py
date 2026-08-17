@@ -25,6 +25,7 @@ OVERRIDABLE = {
     "demo_mode": bool,
     "my_team_id": int,
     "my_draft_slot": int,
+    "faab_remaining": int,
 }
 
 #: Never returned by the API.
@@ -109,6 +110,7 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "demo_mode": settings.demo_mode,
         "my_team_id": settings.my_team_id,
         "my_draft_slot": settings.my_draft_slot,
+        "faab_remaining": overrides.get("faab_remaining"),
         "swid_set": bool(settings.espn_swid),
         "espn_s2_set": bool(settings.espn_s2),
         "has_private_credentials": settings.has_espn_credentials,

@@ -147,17 +147,27 @@ def my_team(session: Session, league: League):
     return next((team for team in league.teams if team.is_mine), None)
 
 
+def espn_roster_ids(session: Session, league: League) -> set[int]:
+    """Player ids on my ESPN roster. Empty when no team is identified.
+
+    Deliberately has no fallback, so callers can tell "ESPN told us this" from
+    "we inferred it from the draft log".
+    """
+    team = my_team(session, league)
+    if not team or not team.roster:
+        return set()
+    return {
+        int(entry["espn_player_id"])
+        for entry in team.roster
+        if entry.get("espn_player_id")
+    }
+
+
 def my_roster_ids(session: Session, league: League) -> set[int]:
     """Player ids on my ESPN roster, falling back to my draft picks."""
-    team = my_team(session, league)
-    if team and team.roster:
-        ids = {
-            int(entry["espn_player_id"])
-            for entry in team.roster
-            if entry.get("espn_player_id")
-        }
-        if ids:
-            return ids
+    ids = espn_roster_ids(session, league)
+    if ids:
+        return ids
 
     from ..models import DraftPick, DraftSession
 

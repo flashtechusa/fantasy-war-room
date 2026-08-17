@@ -50,6 +50,9 @@ class Settings(BaseSettings):
     my_team_id: int | None = None
     my_team_name: str | None = None
     my_draft_slot: int | None = None
+    #: FAAB you have left. Only meaningful in money-waiver leagues; ESPN does
+    #: not report remaining budget reliably, so it is entered in the app.
+    faab_remaining: int | None = None
 
     # --- App --------------------------------------------------------------
     database_url: str = "sqlite:///./data/fantasy_war_room.db"

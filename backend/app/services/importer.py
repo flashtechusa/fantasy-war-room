@@ -191,13 +191,28 @@ def _upsert_teams(
 
 
 def _is_my_team(data: dict, settings: Settings) -> bool:
+    """Which of these teams is yours.
+
+    Explicit configuration wins, then the SWID cookie: ESPN's member ids are
+    the same brace-wrapped GUID as SWID, so the team you own identifies itself
+    with no setup at all. Falling back to the cookie matters because without it
+    a fresh import leaves every season screen empty and the reason is invisible.
+    """
     if settings.my_team_id is not None:
         return int(data["espn_team_id"]) == settings.my_team_id
+
     if settings.my_team_name:
         target = settings.my_team_name.strip().lower()
         if (data.get("name") or "").strip().lower() == target:
             return True
-        return any(target == (owner or "").strip().lower() for owner in data.get("owners") or [])
+        if any(target == (owner or "").strip().lower() for owner in data.get("owners") or []):
+            return True
+
+    if settings.espn_swid:
+        swid = settings.espn_swid.strip().upper()
+        if swid in {str(owner_id).strip().upper() for owner_id in data.get("owner_ids") or []}:
+            return True
+
     return False
 
 
