@@ -14,6 +14,7 @@ from ..engine.valuation import BoardResult, ValuationEngine
 from ..models import DraftSession, League
 from ..services import draft as draft_service
 from ..services.board import LeagueNotImported, build_board, build_engine
+from ..services import season as season_service
 from ..services.importer import get_active_league
 from ..services.runtime_config import effective_settings
 
@@ -71,16 +72,40 @@ class BoardContext:
 
 
 def board_dep(
+    session: Session = Depends(get_db),
     league: League = Depends(league_dep),
     engine: ValuationEngine = Depends(engine_dep),
     draft: DraftSession = Depends(draft_session_dep),
 ) -> BoardContext:
-    """The board for the *current* draft state -- what every screen renders."""
+    """The board for the current state -- what every screen renders.
+
+    Once ESPN has rosters (i.e. the draft happened), they are the truth: every
+    rostered player in the league counts as drafted, and mine are the ones on
+    my team. Reading the draft log instead would show a post-draft league as
+    though nobody had been picked, which made roster needs contradict the
+    lineup sitting directly above them.
+    """
+    espn_roster = season_service.espn_roster_ids(session, league)
+    if espn_roster:
+        rostered_everywhere: list[dict] = []
+        for team in league.teams:
+            for entry in team.roster or []:
+                player_id = entry.get("espn_player_id")
+                if player_id:
+                    rostered_everywhere.append(
+                        {"espn_player_id": int(player_id), "overall_pick": 0}
+                    )
+        drafted = rostered_everywhere
+        mine = espn_roster
+    else:
+        drafted = draft_service.drafted_payload(draft)
+        mine = draft_service.my_player_ids(draft)
+
     board, position = build_board(
         engine=engine,
         league=league,
-        drafted=draft_service.drafted_payload(draft),
-        my_player_ids=draft_service.my_player_ids(draft),
+        drafted=drafted,
+        my_player_ids=mine,
         my_slot=draft.my_draft_slot,
         rounds=draft.rounds,
     )

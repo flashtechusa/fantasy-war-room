@@ -489,3 +489,76 @@ class TestFaabRemaining:
         client.post("/api/league/import", json={})
         client.put("/api/config", json={"faab_remaining": 37})
         assert client.get("/api/config").json()["faab_remaining"] == 37
+
+
+class TestBoardUsesEspnRosterPostDraft:
+    """Reported: 'Remaining draft needs: RB 0/2' while the lineup started 2 RBs."""
+
+    @pytest.fixture
+    def drafted_league(self, client):
+        from sqlalchemy import select
+        from app.db import session_scope
+        from app.models import Player
+        from app.services.importer import get_active_league
+
+        client.post("/api/league/import", json={})
+        with session_scope() as session:
+            league = get_active_league(session)
+            players = session.scalars(
+                select(Player).where(Player.season == league.season)
+            ).all()
+            by_position: dict[str, list] = {}
+            for player in players:
+                by_position.setdefault(player.position, []).append(player)
+            for group in by_position.values():
+                group.sort(key=lambda p: p.adp or 999)
+
+            # Every team gets a full roster, as ESPN reports after a draft.
+            for index, team in enumerate(league.teams):
+                picked = (
+                    by_position["QB"][index: index + 2]
+                    + by_position["RB"][index * 3: index * 3 + 4]
+                    + by_position["WR"][index * 4: index * 4 + 5]
+                    + by_position["TE"][index: index + 2]
+                    + by_position["K"][index: index + 1]
+                    + by_position["DST"][index: index + 1]
+                )
+                team.roster = [
+                    {"espn_player_id": p.espn_player_id, "name": p.name,
+                     "position": p.position, "slot": "BE", "pro_team": p.pro_team}
+                    for p in picked
+                ]
+                team.is_mine = team.espn_team_id == 1
+            session.commit()
+        return client
+
+    def test_needs_agree_with_the_lineup(self, drafted_league):
+        body = drafted_league.get("/api/team").json()
+        started = {
+            s["player"]["position"]
+            for s in body["lineup"]["starters"] if s["player"]
+        }
+        assert "RB" in started
+
+        rb_need = next(n for n in body["remaining_needs"] if n["position"] == "RB")
+        # The bug: this reported 0/2 while two RBs were in the lineup.
+        assert rb_need["starters_filled"] == rb_need["starters_required"]
+
+    def test_rostered_players_are_off_the_board(self, drafted_league):
+        """Post-draft the board should only offer players nobody owns."""
+        board = drafted_league.get("/api/players", params={"limit": 50}).json()
+        mine = {
+            s["player"]["espn_player_id"]
+            for s in drafted_league.get("/api/team").json()["lineup"]["starters"]
+            if s["player"]
+        }
+        listed = {p["espn_player_id"] for p in board["players"]}
+        assert not (mine & listed)
+
+    def test_no_position_reports_a_phantom_hole(self, drafted_league):
+        body = drafted_league.get("/api/team").json()
+        assert body["roster_source"] == "espn"
+        for need in body["remaining_needs"]:
+            assert need["starters_filled"] <= need["starters_required"]
+            if need["starters_required"] > 0 and need["rostered"] > 0:
+                assert need["starters_filled"] > 0

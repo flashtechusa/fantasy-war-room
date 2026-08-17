@@ -52,7 +52,9 @@ export default function MyTeam() {
 
       {data.picks_made === 0 && (
         <Banner kind="info">
-          You haven't drafted anyone yet. Mark your picks in Live Draft and this screen fills in.
+          {data.my_team_identified
+            ? "Your team has no players on it yet."
+            : "No team is marked as yours. Pick it on the League tab and this screen fills in."}
         </Banner>
       )}
 
@@ -171,7 +173,7 @@ export default function MyTeam() {
         </div>
       </Card>
 
-      <Card title="Remaining draft needs">
+      <Card title={data.roster_source === 'espn' ? 'Where an upgrade helps most' : 'Remaining draft needs'}>
         <div className="table-wrap">
           <table>
             <thead>

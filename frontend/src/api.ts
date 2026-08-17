@@ -286,6 +286,8 @@ export interface LineupPlayer {
 
 export interface TeamResponse {
   picks_made: number
+  roster_source: 'espn' | 'draft'
+  my_team_identified: boolean
   lineup: {
     starters: { slot: string; player: LineupPlayer | null }[]
     bench: LineupPlayer[]
