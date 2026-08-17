@@ -156,6 +156,77 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
 }
 
 /**
+ * In-app update.
+ *
+ * The app is usually running somewhere you only have a browser, so shipping a
+ * fix shouldn't require a terminal. This pulls the branch and lets the
+ * auto-reloading server pick it up.
+ */
+function UpdateCard() {
+  const version = useAsync(() => api.version(), [])
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function run() {
+    setBusy(true)
+    setNote(null)
+    try {
+      const result = await api.updateApp()
+      setNote({ ok: true, text: result.detail })
+      if (result.updated) {
+        // The server is restarting; give it a moment, then reload.
+        setTimeout(() => window.location.reload(), 6000)
+      }
+      version.reload()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (version.data && !version.data.git) return null
+
+  const behind = version.data?.updates_available ?? 0
+
+  return (
+    <Card title="App version">
+      <div className="row between">
+        <div className="small" style={{ minWidth: 0 }}>
+          {version.data?.commit ? (
+            <>
+              <div className="mono tiny faint">{version.data.commit}</div>
+              <div className="tiny faint">
+                {version.data.branch} · {version.data.committed}
+              </div>
+            </>
+          ) : (
+            <span className="muted">Checking…</span>
+          )}
+          {behind > 0 && (
+            <div className="tiny" style={{ color: 'var(--accent)', marginTop: 3 }}>
+              {behind} update{behind === 1 ? '' : 's'} available
+            </div>
+          )}
+        </div>
+        <button
+          className={`btn sm ${behind > 0 ? 'primary' : ''}`}
+          onClick={run}
+          disabled={busy}
+        >
+          {busy ? 'Updating…' : behind > 0 ? `Update (${behind})` : 'Check for updates'}
+        </button>
+      </div>
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * Which team is yours, and how much waiver money you have left.
  *
  * Auto-detection matches your SWID cookie against ESPN's owner ids, which
@@ -323,6 +394,8 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
           onChange?.()
         }}
       />
+
+      <UpdateCard />
 
       <MyTeamPicker />
 

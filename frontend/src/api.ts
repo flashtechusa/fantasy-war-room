@@ -471,6 +471,20 @@ export const api = {
   health: () => request<HealthInfo>('/api/health'),
 
   config: () => request<ConfigInfo>('/api/config'),
+
+  version: () =>
+    request<{
+      git: boolean
+      branch?: string
+      commit?: string
+      committed?: string
+      updates_available?: number
+      detail?: string
+    }>('/api/system/version'),
+  updateApp: () =>
+    request<{ updated: boolean; commit: string; detail: string }>('/api/system/update', {
+      method: 'POST',
+    }),
   saveConfig: (body: Record<string, unknown>) =>
     request<ConfigSaveResult>('/api/config', { method: 'PUT', body: JSON.stringify(body) }),
   resetConfig: () => request<{ config: ConfigInfo }>('/api/config', { method: 'DELETE' }),

@@ -62,3 +62,61 @@ class TestConfigEndpoint:
         assert client.get("/api/health").json()["demo_mode"] is True
         client.put("/api/config", json={"espn_league_id": 11507, "demo_mode": False})
         assert client.get("/api/health").json()["demo_mode"] is False
+
+
+class TestSelfUpdate:
+    """Shipping a fix must not require a terminal."""
+
+    def test_version_reports_the_deployed_commit(self, client):
+        body = client.get("/api/system/version").json()
+        assert "git" in body
+        if body["git"]:
+            assert body["commit"]
+            assert body["branch"]
+
+    def test_update_is_reachable_and_reports_its_outcome(self, client, monkeypatch):
+        import app.api.routes_system as system
+
+        calls: list[tuple] = []
+
+        def fake_git(*args):
+            calls.append(args)
+            if args[0] == "rev-parse" and args[1] == "HEAD":
+                return (0, "abc123" if len(calls) < 3 else "def456")
+            if args[0] == "pull":
+                return (0, "Updating abc123..def456")
+            if args[0] == "log":
+                return (0, "def456 a newer commit")
+            return (0, "main")
+
+        monkeypatch.setattr(system, "_git", fake_git)
+        body = client.post("/api/system/update").json()
+        assert body["updated"] is True
+        assert "restarts itself" in body["detail"]
+        # Only ever a fast-forward pull of the current branch.
+        pulls = [c for c in calls if c[0] == "pull"]
+        assert pulls and all("--ff-only" in c for c in pulls)
+
+    def test_a_blocked_pull_explains_why(self, client, monkeypatch):
+        import app.api.routes_system as system
+
+        def fake_git(*args):
+            if args[0] == "pull":
+                return (1, "error: Your local changes would be overwritten")
+            return (0, "main")
+
+        monkeypatch.setattr(system, "_git", fake_git)
+        response = client.post("/api/system/update")
+        assert response.status_code == 409
+        assert "local edits" in response.json()["detail"]
+
+    def test_no_change_is_reported_as_already_current(self, client, monkeypatch):
+        import app.api.routes_system as system
+
+        monkeypatch.setattr(
+            system, "_git",
+            lambda *args: (0, "same") if args[0] == "rev-parse" else (0, "ok"),
+        )
+        body = client.post("/api/system/update").json()
+        assert body["updated"] is False
+        assert "latest" in body["detail"]

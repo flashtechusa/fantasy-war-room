@@ -20,6 +20,7 @@ from .api import (
     routes_players,
     routes_season,
     routes_sim,
+    routes_system,
     routes_team,
 )
 from .api.deps import settings_dep
@@ -71,6 +72,7 @@ app.add_middleware(
 )
 
 app.include_router(routes_config.router)
+app.include_router(routes_system.router)
 app.include_router(routes_league.router)
 app.include_router(routes_players.router)
 app.include_router(routes_draft.router)
