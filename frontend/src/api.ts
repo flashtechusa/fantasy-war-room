@@ -46,6 +46,14 @@ export interface PlayerRow {
   why_now?: string
   why_wait?: string
   principal_risk?: string
+  source_projections?: {
+    key: string
+    label: string
+    points: number | null
+    weight: number
+    counts_towards_blend: boolean
+    has_data: boolean
+  }[]
   scoring_breakdown?: {
     stat_id: number
     abbrev: string

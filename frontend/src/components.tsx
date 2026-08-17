@@ -336,6 +336,50 @@ export function PlayerDetail({
         </dl>
       </Card>
 
+      {player.source_projections && player.source_projections.length > 1 && (
+        <Card title="What each source projects">
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th className="num">Projected</th>
+                  <th className="num">Used</th>
+                </tr>
+              </thead>
+              <tbody>
+                {player.source_projections.map((row) => (
+                  <tr key={row.key}>
+                    <td>{row.label}</td>
+                    <td className="num mono">{row.points ?? '—'}</td>
+                    <td className="num">
+                      {row.counts_towards_blend ? (
+                        <span style={{ color: 'var(--good)' }}>yes</span>
+                      ) : (
+                        <span className="faint">no</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ fontWeight: 700 }}>Used for rankings</td>
+                  <td className="num mono" style={{ fontWeight: 700 }}>
+                    {player.projected_points}
+                  </td>
+                  <td />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div className="tiny faint" style={{ marginTop: 8, whiteSpace: 'normal' }}>
+            Every source is scored under your league's rules, so these are directly
+            comparable. A source marked "no" is stored for comparison but does not
+            affect rankings — usually because it covers too little of the player pool
+            to blend fairly.
+          </div>
+        </Card>
+      )}
+
       {player.scoring_breakdown && player.scoring_breakdown.length > 0 && (
         <Card title="How the projection was scored (your league's rules)">
           <div className="table-wrap">
