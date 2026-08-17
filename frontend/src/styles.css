@@ -139,7 +139,11 @@ a {
   right: 0;
   z-index: 50;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  /* Column per item, however many there are. A fixed count silently wrapped
+     the extra tab onto a second row below the fold, where it was invisible
+     and looked like the build had not shipped. */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   background: rgba(20, 26, 47, 0.97);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--border);
@@ -176,7 +180,7 @@ a {
     position: sticky;
     top: 0;
     bottom: auto;
-    grid-template-columns: repeat(5, auto);
+    grid-auto-columns: auto;
     justify-content: center;
     gap: 6px;
     border-top: none;
