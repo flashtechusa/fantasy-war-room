@@ -351,6 +351,15 @@ export interface SimulationResponse {
   rounds: number
   seed: number
   expected_roster_points: { mean: number; p10: number; p90: number }
+  actual_league?: {
+    available: boolean
+    team_count?: number
+    best?: number
+    best_team?: string
+    median?: number
+    worst?: number
+    mine?: number | null
+  }
   mean_starter_points_by_position: Record<string, number>
   strategy: string[]
   picks: {

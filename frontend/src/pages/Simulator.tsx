@@ -100,19 +100,44 @@ export default function Simulator() {
             </div>
           </Card>
 
-          <Card title="Expected final roster strength">
+          <Card title="What the simulator's strategy scores">
             <dl className="kv">
-              <dt>Mean projected starter points</dt>
+              <dt>Typical run</dt>
               <dd>{result.expected_roster_points.mean}</dd>
-              <dt>10th percentile (bad draft)</dt>
+              <dt>Worst 10% of its runs</dt>
               <dd>{result.expected_roster_points.p10}</dd>
-              <dt>90th percentile (good draft)</dt>
+              <dt>Best 10% of its runs</dt>
               <dd>{result.expected_roster_points.p90}</dd>
             </dl>
             <div className="tiny faint" style={{ marginTop: 8 }}>
-              Season totals for the optimal starting lineup from the roster the simulator built.
+              These are outcomes for the simulator's own strategy, not a human benchmark. It
+              always takes the highest value available and never reaches, so it should be
+              expected to land above real rosters.
             </div>
           </Card>
+
+          {result.actual_league?.available && (
+            <Card title="What your league actually did">
+              <dl className="kv">
+                <dt>Best team ({result.actual_league.best_team})</dt>
+                <dd>{result.actual_league.best}</dd>
+                <dt>League median</dt>
+                <dd>{result.actual_league.median}</dd>
+                {result.actual_league.mine != null && (
+                  <>
+                    <dt>Your team</dt>
+                    <dd>{result.actual_league.mine}</dd>
+                  </>
+                )}
+                <dt>Worst team</dt>
+                <dd>{result.actual_league.worst}</dd>
+              </dl>
+              <div className="tiny faint" style={{ marginTop: 8 }}>
+                Same measure, same scoring, {result.actual_league.team_count} real rosters — so
+                these numbers and the ones above are directly comparable.
+              </div>
+            </Card>
+          )}
 
           <Card title="Where waiting is safe, and where it isn't">
             {result.wait_profiles.map((profile) => {
