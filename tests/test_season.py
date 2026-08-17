@@ -382,7 +382,7 @@ class TestMyTeamIdentification:
             "espn_team_id": 3,
             "name": "Gridiron Goblins",
             "owners": ["Alex Whitfield"],
-            "owner_ids": ["{0899A4A2-0BBB-467C-9A28-CEBC5032330E}"],
+            "owner_ids": ["{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"],
         }
         base.update(overrides)
         return base
@@ -392,7 +392,7 @@ class TestMyTeamIdentification:
         from app.services.importer import _is_my_team
 
         settings = Settings(
-            _env_file=None, espn_swid="{0899A4A2-0BBB-467C-9A28-CEBC5032330E}"
+            _env_file=None, espn_swid="{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
         )
         assert _is_my_team(self._team_payload(), settings)
 
@@ -400,14 +400,14 @@ class TestMyTeamIdentification:
         from app.config import Settings
         from app.services.importer import _is_my_team
 
-        settings = Settings(_env_file=None, espn_swid="0899a4a2-0bbb-467c-9a28-cebc5032330e")
+        settings = Settings(_env_file=None, espn_swid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
         assert _is_my_team(self._team_payload(), settings)
 
     def test_a_different_owner_is_not_my_team(self):
         from app.config import Settings
         from app.services.importer import _is_my_team
 
-        settings = Settings(_env_file=None, espn_swid="{AAAAAAAA-0000-0000-0000-000000000000}")
+        settings = Settings(_env_file=None, espn_swid="{99999999-8888-7777-6666-555555555555}")
         assert not _is_my_team(self._team_payload(), settings)
 
     def test_explicit_team_id_beats_the_cookie(self):
@@ -416,7 +416,7 @@ class TestMyTeamIdentification:
 
         settings = Settings(
             _env_file=None,
-            espn_swid="{0899A4A2-0BBB-467C-9A28-CEBC5032330E}",
+            espn_swid="{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}",
             my_team_id=9,
         )
         assert not _is_my_team(self._team_payload(), settings)
