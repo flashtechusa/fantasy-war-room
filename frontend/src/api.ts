@@ -284,6 +284,38 @@ export interface LineupPlayer {
   injury_status: string
 }
 
+export interface LeagueTeamRow {
+  espn_team_id: number
+  name: string
+  owners: string[]
+  is_mine: boolean
+  roster_size: number
+  rank: number
+  construction_rank: number
+  roster_construction_score: number
+  roster_construction_notes: string[]
+  projected_starter_points: number
+  weekly_points: number
+  positional_strength: {
+    position: string
+    starters_points: number
+    league_average_points: number
+    edge: number
+    grade: string
+  }[]
+  strengths: string[]
+  weaknesses: string[]
+  bye_conflicts: { week: number; players: string[]; positions: string[]; severity: string }[]
+}
+
+export interface LeagueTeamsResponse {
+  teams: LeagueTeamRow[]
+  team_count: number
+  league_median_points: number
+  league_median_score: number
+  note: string
+}
+
 export interface TeamResponse {
   picks_made: number
   roster_source: 'espn' | 'draft'
@@ -549,6 +581,8 @@ export const api = {
     ),
 
   team: () => request<TeamResponse>('/api/team'),
+
+  leagueTeams: () => request<LeagueTeamsResponse>('/api/team/league'),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),
