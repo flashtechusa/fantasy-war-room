@@ -14,11 +14,17 @@
          version does not answer.
       5. Writes every run to a log, so a silent failure is still discoverable.
 
-    Deliberately does not run on Sunday: an app that is down at 12:55pm because
-    it updated itself that morning is worse than one running last week's code.
+    Skips Sunday 11:00-20:00 entirely: an app that is down at 12:55pm because
+    it updated itself is worse than one running yesterday's code.
 
 .EXAMPLE
+    # Check every 30 minutes (default) -- a push lands within the half hour.
     powershell -NoProfile -ExecutionPolicy Bypass -File auto-update.ps1 -Register
+
+    # Quieter, once a day at 04:30.
+    powershell -NoProfile -ExecutionPolicy Bypass -File auto-update.ps1 -Register -EveryMinutes 0
+
+    # Run one check now.
     powershell -NoProfile -ExecutionPolicy Bypass -File auto-update.ps1
 #>
 [CmdletBinding()]
@@ -30,6 +36,10 @@ param(
     [string]$TaskName   = 'FantasyWarRoom',
     # Register the recurring schedule instead of running an update now.
     [switch]$Register,
+    # How often to check, in minutes. 0 means once a day at 04:30.
+    # Checking often is cheap -- an unchanged commit exits in about a second
+    # without touching the app -- so during active development this can be 15.
+    [int]$EveryMinutes = 30,
     # Update even when the remote commit has not changed.
     [switch]$Force
 )
@@ -55,22 +65,44 @@ if ($Register) {
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -WorkingDirectory $InstallDir `
         -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$self`""
 
-    # 04:30 Mon/Tue/Wed/Thu/Fri/Sat. Never Sunday -- see the note above.
-    $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday -At 4:30AM
+    if ($EveryMinutes -gt 0) {
+        # Repeat all day. A check with no new commit costs one API call and
+        # exits without stopping the app, so frequent is fine -- and it means a
+        # push lands within the interval instead of the next morning.
+        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(5) `
+            -RepetitionInterval (New-TimeSpan -Minutes $EveryMinutes)
+        $cadence = "every $EveryMinutes minutes"
+    } else {
+        $trigger = New-ScheduledTaskTrigger -Weekly `
+            -DaysOfWeek Monday,Tuesday,Wednesday,Thursday,Friday,Saturday -At 4:30AM
+        $cadence = "at 04:30, Monday through Saturday"
+    }
+
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
         -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
+        -MultipleInstances IgnoreNew `
         -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
     Register-ScheduledTask -TaskName 'FantasyWarRoomAutoUpdate' -Action $action `
         -Trigger $trigger -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
 
-    Write-Host "Registered. Updates check at 04:30, Monday through Saturday." -ForegroundColor Green
+    Write-Host "Registered. Checking for updates $cadence." -ForegroundColor Green
+    Write-Host "Sunday 11:00-20:00 is skipped so a restart never lands during games."
     Write-Host "Log: $log"
     exit 0
 }
 
 # ------------------------------------------------------------------- checks --
 New-Item -ItemType Directory -Force -Path $logDir, $backupDir | Out-Null
+
+# With a repeating trigger the Sunday exclusion cannot live on the schedule, so
+# it lives here: never restart the app while games are being played.
+$now = Get-Date
+if (-not $Force -and $now.DayOfWeek -eq 'Sunday' -and $now.Hour -ge 11 -and $now.Hour -lt 20) {
+    Write-Log "Sunday game window -- skipping."
+    exit 0
+}
+
 Write-Log "=== auto-update starting ==="
 
 if (-not (Test-Path (Join-Path $InstallDir 'pyproject.toml'))) {
