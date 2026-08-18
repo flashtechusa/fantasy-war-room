@@ -35,7 +35,7 @@ from app.engine.roster import (  # noqa: E402
     positional_strength,
     roster_construction_score,
 )
-from app.models import League  # noqa: E402
+from app.models import League, Player  # noqa: E402
 from app.services import board as board_service  # noqa: E402
 from app.services import season as season_service  # noqa: E402
 
@@ -127,6 +127,94 @@ def snapshot(path: Path) -> dict:
             p.name: round(engine._points[p.espn_player_id], 1) for p in engine.players
         },
     }
+
+
+def supply(path: Path) -> None:
+    """Who the app thinks is actually gettable.
+
+    Three screens disagree when this is wrong: My Team offers an upgrade worth
+    hundreds of points, Waivers offers a defence worth three, and VOR moves
+    without anyone changing a roster. All of them read the same supply.
+    """
+    session = open_db(path)
+    league = session.scalars(
+        select(League).order_by(League.imported_at.desc())
+    ).first()
+    if league is None:
+        return
+
+    print("\n" + "=" * 68)
+    print("SUPPLY -- who the app believes is available")
+    print("=" * 68)
+
+    players = session.scalars(
+        select(Player).where(Player.season == league.season)
+    ).all()
+    buckets: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for player in players:
+        buckets[player.position][player.availability or "(blank)"] += 1
+
+    states = sorted({s for row in buckets.values() for s in row})
+    print("\n  pool by position and ESPN availability")
+    print("  pos   " + "".join(f"{s:>12}" for s in states) + "       total")
+    for position in sorted(buckets):
+        row = buckets[position]
+        total = sum(row.values())
+        print(
+            f"  {position:4}  " + "".join(f"{row.get(s, 0):>12}" for s in states)
+            + f"  {total:10}"
+        )
+
+    rostered = {
+        int(entry["espn_player_id"])
+        for team in league.teams
+        for entry in (team.roster or [])
+        if entry.get("espn_player_id")
+    }
+    print(f"\n  rostered across all {len(league.teams)} teams : {len(rostered)}")
+    print(f"  players in the pool             : {len(players)}")
+    print(f"  therefore treated as gettable   : {len(players) - len(rostered)}")
+    if not rostered:
+        print(
+            "\n  !! No team rosters are stored. Every player in the pool"
+            " then looks free, so 'best available' becomes the best player"
+            " in the league and the upgrade figures on My Team are"
+            " nonsense. Re-import."
+        )
+
+    board_service.clear_cache()
+    engine = board_service.build_engine(session, league)
+    free = [p for p in engine.players if p.espn_player_id not in rostered]
+    by_position: dict[str, list] = defaultdict(list)
+    for player in free:
+        by_position[player.position].append(player)
+
+    print("\n  best 3 the app would offer you at each position")
+    print("  (if a name here is on somebody's team, that is the bug)")
+    for position in sorted(by_position):
+        ranked = sorted(
+            by_position[position],
+            key=lambda p: engine._points[p.espn_player_id],
+            reverse=True,
+        )[:3]
+        names = ", ".join(
+            f"{p.name} {engine._points[p.espn_player_id]:.0f}" for p in ranked
+        )
+        print(f"  {position:4}  {names}")
+
+    wire = [p for p in players if (p.availability or "") in {"FREEAGENT", "WAIVERS"}]
+    wire_positions: dict[str, int] = defaultdict(int)
+    for player in wire:
+        wire_positions[player.position] += 1
+    print(
+        f"\n  ESPN calls {len(wire)} of them free agents: "
+        + ", ".join(f"{k} {v}" for k, v in sorted(wire_positions.items()))
+    )
+    if wire and set(wire_positions) <= {"DST", "K"}:
+        print(
+            "     Only kickers and defences came back from the free-agent import,\n"
+            "     which is why the waiver screen offers nothing else."
+        )
 
 
 def report(snap: dict) -> None:
@@ -256,6 +344,7 @@ def main() -> int:
 
     now = snapshot(args.db)
     report(now)
+    supply(args.db)
     if args.compare:
         compare(now, snapshot(args.compare))
     return 0
