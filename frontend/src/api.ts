@@ -680,6 +680,12 @@ export const api = {
     ),
   me: () => request<AuthState>('/api/auth/me'),
 
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ changed: boolean }>('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+
   myConfig: () => request<MyConfig>('/api/config/mine'),
 
   saveMyConfig: (body: Record<string, unknown>) =>

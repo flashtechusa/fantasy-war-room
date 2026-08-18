@@ -45,6 +45,9 @@ export default function App() {
     )
   }
 
+  const hasLeague = Boolean(health.data?.league_imported)
+  const landing = hasLeague ? '/week' : '/settings'
+
   async function signOut() {
     try {
       await api.logout()
@@ -65,14 +68,17 @@ export default function App() {
             {health.data?.league?.source === 'demo' && ' · DEMO DATA'}
           </div>
         </div>
-        <button
-          className="btn sm"
-          onClick={signOut}
-          style={{ flexShrink: 0 }}
-          aria-label="Sign out"
-        >
-          Sign out
-        </button>
+        <div className="row" style={{ gap: 10, flexShrink: 0, alignItems: 'center' }}>
+          <div style={{ textAlign: 'right', minWidth: 0 }}>
+            <div className="small" style={{ fontWeight: 650 }}>
+              {auth.data.user?.display_name || auth.data.user?.username}
+            </div>
+            <div className="tiny faint">{auth.data.user?.role}</div>
+          </div>
+          <button className="btn sm" onClick={signOut} aria-label="Sign out">
+            Sign out
+          </button>
+        </div>
       </header>
 
       <nav className="app-nav" aria-label="Primary">
@@ -88,7 +94,10 @@ export default function App() {
 
       <main className="app-main">
         <Routes>
-          <Route path="/" element={<Navigate to="/week" replace />} />
+          {/* Somebody with no league of their own has nothing to show on the
+              weekly screens, so send them where they can connect one rather
+              than to an error. */}
+          <Route path="/" element={<Navigate to={landing} replace />} />
           <Route path="/week" element={<Week />} />
           <Route path="/waivers" element={<Waivers />} />
           <Route path="/trade" element={<Trade />} />
@@ -107,7 +116,7 @@ export default function App() {
               />
             }
           />
-          <Route path="*" element={<Navigate to="/week" replace />} />
+          <Route path="*" element={<Navigate to={landing} replace />} />
         </Routes>
       </main>
     </div>
