@@ -496,6 +496,22 @@ export interface AccountRow {
   last_login_at: string | null
 }
 
+export interface MyConfig {
+  configured: boolean
+  espn_league_id: number | null
+  espn_season: number | null
+  swid_set: boolean
+  espn_s2_set: boolean
+  my_team_id: number | null
+  faab_remaining: number | null
+}
+
+export interface ConnectionResult {
+  connected: boolean
+  league_name?: string
+  detail?: string
+}
+
 export interface AuthState {
   authenticated: boolean
   user: { username: string; display_name: string; role: string } | null
@@ -663,6 +679,14 @@ export const api = {
       { method: 'POST' },
     ),
   me: () => request<AuthState>('/api/auth/me'),
+
+  myConfig: () => request<MyConfig>('/api/config/mine'),
+
+  saveMyConfig: (body: Record<string, unknown>) =>
+    request<{ saved: boolean; config: MyConfig; connection: ConnectionResult | null }>(
+      '/api/config/mine',
+      { method: 'PUT', body: JSON.stringify(body) },
+    ),
 
   betaRequests: () => request<{ requests: BetaRequestRow[] }>('/api/auth/beta-requests'),
 

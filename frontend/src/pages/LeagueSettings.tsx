@@ -20,7 +20,10 @@ import { useAsync } from '../useAsync'
  * are set.
  */
 function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
-  const config = useAsync(() => api.config(), [])
+  // The signed-in user's OWN connection. Never the install-wide one: a new
+  // account must not open this screen and find someone else's league id and
+  // cookies sitting in it.
+  const config = useAsync(() => api.myConfig(), [])
   const [open, setOpen] = useState(false)
   const [leagueId, setLeagueId] = useState('')
   const [season, setSeason] = useState('')
@@ -30,7 +33,7 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
 
   const current = config.data
-  const configured = Boolean(current?.espn_league_id) && !current?.demo_mode
+  const configured = Boolean(current?.espn_league_id)
 
   // Open automatically when there's nothing configured — that's the first thing
   // a new install needs to do.
@@ -42,13 +45,13 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
     setSaving(true)
     setResult(null)
     try {
-      const body: Record<string, unknown> = { demo_mode: false }
+      const body: Record<string, unknown> = {}
       if (leagueId.trim()) body.espn_league_id = Number(leagueId.trim())
       if (season.trim()) body.espn_season = Number(season.trim())
       if (swid.trim()) body.espn_swid = swid.trim()
       if (s2.trim()) body.espn_s2 = s2.trim()
 
-      const response = await api.saveConfig(body)
+      const response = await api.saveMyConfig(body)
       setSwid('')
       setS2('')
       config.reload()
@@ -77,7 +80,7 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
             <>
               League <strong>{current?.espn_league_id}</strong> · {current?.espn_season}
               <div className="tiny faint">
-                {current?.has_private_credentials
+                {current?.espn_s2_set
                   ? 'Private-league cookies stored'
                   : 'Public league (no cookies)'}
               </div>
@@ -140,8 +143,9 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
             {saving ? 'Testing connection…' : 'Save & test connection'}
           </button>
           <div className="tiny faint" style={{ marginTop: 8 }}>
-            Cookies are stored in your local database and are never sent back to the browser.
-            Public leagues need only the league id.
+            Your cookies are encrypted before they are stored and are never sent back to
+            the browser. This connection is yours alone — nobody else with an account can
+            see it. Public leagues need only the league id.
           </div>
         </>
       )}
@@ -359,7 +363,7 @@ function UpdateCard() {
  * first-class control, not a hidden setting.
  */
 function MyTeamPicker() {
-  const config = useAsync(() => api.config(), [])
+  const config = useAsync(() => api.myConfig(), [])
   const league = useAsync(() => api.league().catch(() => null), [])
   const [saving, setSaving] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -373,7 +377,7 @@ function MyTeamPicker() {
     setSaving(true)
     setNote(null)
     try {
-      await api.saveConfig(patch)
+      await api.saveMyConfig(patch)
       config.reload()
       // Re-import so team ownership is re-evaluated across the league.
       await api.importLeague()
@@ -460,7 +464,17 @@ function MyTeamPicker() {
   )
 }
 
-export default function LeagueSettings({ onChange }: { onChange?: () => void }) {
+export default function LeagueSettings({
+  onChange,
+  role = 'client',
+}: {
+  onChange?: () => void
+  role?: string
+}) {
+  // Install-wide settings belong to the owner. A client's League screen shows
+  // their own connection and nothing else -- otherwise saving here would
+  // change what every account without a connection of its own inherits.
+  const isOwner = role === 'owner'
   const health = useAsync(() => api.health(), [])
   const league = useAsync(() => api.league().catch(() => null), [])
   const history = useAsync(() => api.history().catch(() => null), [])
@@ -511,7 +525,7 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
     <>
       {message && <Banner kind={message.kind === 'error' ? 'error' : 'info'}>{message.text}</Banner>}
 
-      <FantasyProsCard onImported={() => onChange?.()} />
+      {isOwner && <FantasyProsCard onImported={() => onChange?.()} />}
 
       <EspnConnectionForm
         onSaved={() => {

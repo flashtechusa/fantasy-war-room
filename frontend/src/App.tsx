@@ -98,7 +98,15 @@ export default function App() {
           <Route path="/teams" element={<PowerRankings />} />
           <Route path="/access" element={<Access />} />
           <Route path="/simulate" element={<Simulator />} />
-          <Route path="/settings" element={<LeagueSettings onChange={health.reload} />} />
+          <Route
+            path="/settings"
+            element={
+              <LeagueSettings
+                onChange={health.reload}
+                role={auth.data?.user?.role ?? "client"}
+              />
+            }
+          />
           <Route path="*" element={<Navigate to="/week" replace />} />
         </Routes>
       </main>

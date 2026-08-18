@@ -15,6 +15,7 @@ from ..espn.client import EspnClient, EspnConnectionError
 from ..services import board as board_service
 from ..services import runtime_config
 from .routes_auth import require_user
+from .routes_admin import owner_only as require_owner
 from ..services.runtime_config import (
     clear_overrides,
     describe,
@@ -56,6 +57,7 @@ def read_my_config(
             "swid_set": False,
             "espn_s2_set": False,
             "my_team_id": None,
+            "faab_remaining": None,
         }
     return {
         "configured": config.espn_league_id is not None,
@@ -64,6 +66,7 @@ def read_my_config(
         "swid_set": bool(config.espn_swid_encrypted),
         "espn_s2_set": bool(config.espn_s2_encrypted),
         "my_team_id": config.my_team_id,
+        "faab_remaining": config.faab_remaining,
     }
 
 
@@ -79,15 +82,51 @@ def save_my_config(
     without seeing each other's team. Cookies are encrypted before storage.
     """
     values = payload.model_dump(exclude_unset=True)
+    # Install-wide keys are not settable from a personal connection. Letting a
+    # normal user through here would let them switch off demo mode for
+    # everyone, or overwrite the owner's provider key.
+    for install_wide in ("demo_mode", "fantasypros_api_key"):
+        values.pop(install_wide, None)
+
     runtime_config.save_user_config(session, user, values)
     session.commit()
     board_service.clear_cache()
-    return read_my_config(session, user)
+
+    result: dict = {
+        "saved": True,
+        "config": read_my_config(session, user),
+        "connection": None,
+    }
+
+    # Test with *this user's* resolved settings, so the answer is about their
+    # league rather than whatever the install happens to point at.
+    settings = runtime_config.settings_for_user(session, user)
+    if settings.can_reach_espn:
+        client = EspnClient(
+            league_id=settings.espn_league_id,
+            season=settings.espn_season,
+            swid=settings.espn_swid,
+            espn_s2=settings.espn_s2,
+        )
+        try:
+            result["connection"] = {"connected": True, **client.check_connection()}
+        except EspnConnectionError as exc:
+            result["connection"] = {"connected": False, "detail": str(exc)}
+    return result
 
 
 @router.get("")
-def read_config(session: Session = Depends(get_db)) -> dict:
-    """Current effective configuration. Cookies are reported as set/unset only."""
+def read_config(
+    session: Session = Depends(get_db), user=Depends(require_owner)
+) -> dict:
+    """Install-wide configuration. Owner only.
+
+    This reports the fallback league every account without its own connection
+    inherits, so it is the owner's league id -- not something to hand to every
+    signed-in user. Personal settings live at `/api/config/mine`.
+
+    Cookies are reported as set/unset, never returned.
+    """
     return describe(session)
 
 
@@ -95,8 +134,13 @@ def read_config(session: Session = Depends(get_db)) -> dict:
 def update_config(
     payload: EspnConfigRequest,
     session: Session = Depends(get_db),
+    user=Depends(require_owner),
 ) -> dict:
-    """Save ESPN configuration and immediately test the connection.
+    """Save install-wide ESPN configuration and test the connection.
+
+    Owner only. A normal user configures their own connection through
+    `/api/config/mine`; this one is the fallback every account without a
+    connection of its own inherits, so it is not theirs to change.
 
     Only the fields you send are changed; send an empty string to clear one.
     """
@@ -121,7 +165,9 @@ def update_config(
 
 
 @router.delete("")
-def reset_config(session: Session = Depends(get_db)) -> dict:
+def reset_config(
+    session: Session = Depends(get_db), user=Depends(require_owner)
+) -> dict:
     """Drop UI-entered configuration and fall back to the environment."""
     clear_overrides(session)
     board_service.clear_cache()
