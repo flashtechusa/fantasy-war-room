@@ -143,16 +143,35 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
     ESPN connection. The user layer is what makes the app multi-tenant -- two
     people signed in at once resolve to two different leagues.
 
-    A user with no connection of their own falls through to the install-wide
-    one. That keeps a single-user install (the owner's) working exactly as it
-    did before accounts existed.
+    Only the owner inherits the install-wide ESPN connection. Letting everyone
+    inherit it meant a new account with no league of its own was shown the
+    owner's -- their roster, their waivers, their settings. A client with no
+    connection gets no league, and the app asks them to connect one.
     """
     from ..services import secrets as secret_store
 
     base = effective_settings(session, base)
     config = user_config(session, user)
-    if config is None:
-        return base
+
+    is_owner = getattr(user, "role", None) == "owner"
+    if config is None or config.espn_league_id is None:
+        if is_owner:
+            return base
+        # Blank out the inherited connection rather than passing it through.
+        stripped = base.model_dump()
+        stripped.update(
+            {
+                "espn_league_id": None,
+                "espn_swid": None,
+                "espn_s2": None,
+                "my_team_id": None,
+                "my_team_name": None,
+                "demo_mode": False,
+            }
+        )
+        if config is None:
+            return Settings.model_validate(stripped)
+        base = Settings.model_validate(stripped)
 
     merged = base.model_dump()
     if config.espn_league_id is not None:

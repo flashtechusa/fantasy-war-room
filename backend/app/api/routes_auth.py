@@ -35,6 +35,15 @@ class LoginRequest(BaseModel):
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
 
 
+class ChangePassword(BaseModel):
+    current_password: str = Field(min_length=1, max_length=400)
+    # Long enough to be worth having, short enough that nobody gives up. The
+    # generated ones are 14 characters, so this never rejects one of those.
+    new_password: str = Field(min_length=10, max_length=400)
+
+    model_config = {"extra": "forbid"}
+
+
 class BetaRequestPayload(BaseModel):
     email: str = Field(min_length=3, max_length=250)
     name: str = Field(default="", max_length=160)
@@ -124,6 +133,53 @@ def logout(
     session.commit()
     response.delete_cookie(auth_service.SESSION_COOKIE, path="/")
     return {"authenticated": False}
+
+
+@router.post("/change-password")
+def change_password(
+    payload: ChangePassword,
+    request: Request,
+    response: Response,
+    session: Session = Depends(get_db),
+    user: User = Depends(require_user),
+) -> dict:
+    """Replace your own password.
+
+    Requires the current one, so someone who walks up to an unlocked browser
+    cannot lock the real owner out of their own account.
+
+    Every other session is ended: if the password is being changed because it
+    may have been seen, leaving old sessions alive would defeat the point. The
+    browser doing the changing is given a fresh session so it stays signed in.
+    """
+    if not auth_service.verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="That is not your current password.",
+        )
+    if payload.new_password == payload.current_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The new password must be different from the old one.",
+        )
+
+    user.password_hash = auth_service.hash_password(payload.new_password)
+    auth_service.revoke_all_for_user(session, user.id)
+    token = auth_service.create_session(
+        session, user, request.headers.get("user-agent", "")
+    )
+    session.commit()
+    response.set_cookie(
+        key=auth_service.SESSION_COOKIE,
+        value=token,
+        max_age=auth_service.SESSION_DAYS * 24 * 3600,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path="/",
+    )
+    log.info("Password changed: %s", user.username)
+    return {"changed": True}
 
 
 @router.post("/beta-request", status_code=status.HTTP_201_CREATED)

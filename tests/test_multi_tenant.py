@@ -119,19 +119,43 @@ class TestSeparateLeagues:
             assert settings_for_user(session, owner, get_settings()).espn_league_id == 11507
             assert settings_for_user(session, dave, get_settings()).espn_league_id == 99999
 
-    def test_a_user_without_a_connection_falls_back_to_the_install(self, two_users):
-        """A single-user install must keep working exactly as before."""
+    def test_only_the_owner_inherits_the_install_wide_connection(self, two_users):
+        """This test previously asserted the opposite, and that was the bug.
+
+        Letting every account inherit the install-wide league meant a new
+        client with no connection of their own was served the owner's team.
+        The owner still inherits it -- that is what keeps a single-user
+        install working -- but nobody else does.
+        """
         from app.config import get_settings
         from app.db import session_scope
         from app.models import User
-        from app.services.runtime_config import settings_for_user, write_overrides
+        from app.services.runtime_config import settings_for_user
 
         client = two_users["client"]
         client.put("/api/config", json={"espn_league_id": 4242})
 
         with session_scope() as session:
+            owner = session.query(User).filter(User.username == "owner").one()
             dave = session.query(User).filter(User.username == "dave").one()
-            assert settings_for_user(session, dave, get_settings()).espn_league_id == 4242
+
+            assert settings_for_user(session, owner, get_settings()).espn_league_id == 4242
+            assert settings_for_user(session, dave, get_settings()).espn_league_id is None
+
+    def test_a_client_does_not_inherit_the_install_wide_cookies_either(self, two_users):
+        from app.config import get_settings
+        from app.db import session_scope
+        from app.models import User
+        from app.services.runtime_config import settings_for_user
+
+        client = two_users["client"]
+        client.put("/api/config", json={"espn_league_id": 4242, "espn_s2": "install-cookie"})
+
+        with session_scope() as session:
+            dave = session.query(User).filter(User.username == "dave").one()
+            resolved = settings_for_user(session, dave, get_settings())
+            assert resolved.espn_s2 is None
+            assert resolved.espn_swid is None
 
 
 class TestStillGuarded:
