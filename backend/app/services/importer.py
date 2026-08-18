@@ -49,12 +49,23 @@ def ensure_projection_sources(session: Session) -> None:
     session.flush()
 
 
+def configured_league_id(settings: Settings) -> int | None:
+    """The league id for whichever platform this install is pointed at.
+
+    `League.espn_league_id` predates Yahoo support and now holds the id from
+    whichever platform imported the league; renaming the column would break
+    every existing database for no behavioural gain.
+    """
+    return settings.yahoo_league_id if settings.is_yahoo else settings.espn_league_id
+
+
 def get_active_league(session: Session, settings: Settings | None = None) -> League | None:
     """The league this app instance is configured for."""
     settings = settings or get_settings()
     stmt = select(League).where(League.season == settings.espn_season)
-    if settings.espn_league_id is not None and not settings.demo_mode:
-        stmt = stmt.where(League.espn_league_id == settings.espn_league_id)
+    league_id = configured_league_id(settings)
+    if league_id is not None and not settings.demo_mode:
+        stmt = stmt.where(League.espn_league_id == league_id)
     league = session.scalars(stmt.order_by(League.imported_at.desc())).first()
     if league is not None:
         return league
@@ -193,10 +204,11 @@ def _upsert_teams(
 def _is_my_team(data: dict, settings: Settings) -> bool:
     """Which of these teams is yours.
 
-    Explicit configuration wins, then the SWID cookie: ESPN's member ids are
-    the same brace-wrapped GUID as SWID, so the team you own identifies itself
-    with no setup at all. Falling back to the cookie matters because without it
-    a fresh import leaves every season screen empty and the reason is invisible.
+    Explicit configuration wins, then whatever the platform tells us for free:
+    Yahoo flags the team owned by the signed-in account outright, and ESPN's
+    member ids are the same brace-wrapped GUID as the SWID cookie. Using those
+    matters because without them a fresh import leaves every season screen
+    empty and the reason is invisible.
     """
     if settings.my_team_id is not None:
         return int(data["espn_team_id"]) == settings.my_team_id
@@ -206,6 +218,15 @@ def _is_my_team(data: dict, settings: Settings) -> bool:
         if (data.get("name") or "").strip().lower() == target:
             return True
         if any(target == (owner or "").strip().lower() for owner in data.get("owners") or []):
+            return True
+
+    # Yahoo says so directly, and it is never wrong.
+    if data.get("is_current_login"):
+        return True
+
+    if settings.yahoo_guid:
+        guid = settings.yahoo_guid.strip().upper()
+        if guid in {str(owner_id).strip().upper() for owner_id in data.get("owner_ids") or []}:
             return True
 
     if settings.espn_swid:
@@ -349,15 +370,20 @@ def import_players(
         if player.id is None:
             session.flush()  # need the surrogate key for the projection row
 
-        projection = projections.get((player.id, source_key))
-        if projection is None:
-            projection = PlayerProjection(player_id=player.id, source_key=source_key)
-            session.add(projection)
-            projections[(player.id, source_key)] = projection
-        projection.raw_stats = record.raw_stats
-        projection.source_points = record.espn_projected_points
-        projection.projected_games = record.projected_games
-        projection.updated_at = now
+        # Yahoo publishes no projections, so its records carry no stat line.
+        # Writing an empty projection row would register a source that scores
+        # every player at zero, which reads downstream as "projected to score
+        # nothing" rather than "not projected".
+        if record.raw_stats:
+            projection = projections.get((player.id, source_key))
+            if projection is None:
+                projection = PlayerProjection(player_id=player.id, source_key=source_key)
+                session.add(projection)
+                projections[(player.id, source_key)] = projection
+            projection.raw_stats = record.raw_stats
+            projection.source_points = record.espn_projected_points
+            projection.projected_games = record.projected_games
+            projection.updated_at = now
 
         _store_weekly(session, weekly, player, source_key, record, now)
 

@@ -22,6 +22,7 @@ from .api import (
     routes_sim,
     routes_system,
     routes_team,
+    routes_yahoo,
 )
 from .api.deps import settings_dep
 from .config import Settings, get_settings
@@ -29,7 +30,9 @@ from .db import get_db, init_db
 from .espn.client import EspnConnectionError
 from .models import League, Player
 from .services.importer import get_active_league
-from .services.provider import build_espn_client
+from .services.provider import build_espn_client, build_yahoo_client
+from .yahoo.client import YahooConnectionError
+from .yahoo.oauth import YahooAuthError
 
 log = logging.getLogger(__name__)
 
@@ -45,10 +48,11 @@ async def lifespan(app: FastAPI):
     init_db()
     settings = get_settings()
     log.info(
-        "Fantasy War Room ready (season=%s, demo=%s, espn_league=%s)",
+        "Fantasy War Room ready (platform=%s, season=%s, demo=%s, league=%s)",
+        settings.platform,
         settings.espn_season,
         settings.demo_mode,
-        settings.espn_league_id or "unset",
+        (settings.yahoo_league_id if settings.is_yahoo else settings.espn_league_id) or "unset",
     )
     yield
 
@@ -72,6 +76,7 @@ app.add_middleware(
 )
 
 app.include_router(routes_config.router)
+app.include_router(routes_yahoo.router)
 app.include_router(routes_system.router)
 app.include_router(routes_league.router)
 app.include_router(routes_players.router)
@@ -101,6 +106,13 @@ def health(
         "status": "ok",
         "season": settings.espn_season,
         "demo_mode": settings.demo_mode,
+        "platform": settings.platform,
+        "yahoo": {
+            "league_id_configured": settings.yahoo_league_id is not None,
+            "app_configured": settings.has_yahoo_app,
+            "connected": settings.has_yahoo_credentials,
+            "reachable_config": settings.can_reach_yahoo,
+        },
         "espn": {
             "league_id_configured": settings.espn_league_id is not None,
             "private_credentials_configured": settings.has_espn_credentials,
@@ -139,6 +151,36 @@ def espn_health(settings: Settings = Depends(settings_dep)) -> dict:
         client = build_espn_client(settings)
         return {"demo_mode": False, **client.check_connection()}
     except EspnConnectionError as exc:
+        return {"connected": False, "demo_mode": False, "detail": str(exc)}
+
+
+@app.get("/api/health/yahoo", tags=["system"])
+def yahoo_health(settings: Settings = Depends(settings_dep)) -> dict:
+    """Live Yahoo connectivity probe -- the Yahoo half of the League screen."""
+    if settings.demo_mode:
+        return {"connected": False, "demo_mode": True, "detail": "Demo mode is enabled."}
+    if not settings.has_yahoo_app:
+        return {
+            "connected": False,
+            "demo_mode": False,
+            "detail": "No Yahoo app configured. Create one at developer.yahoo.com and paste "
+            "its Client ID and Secret on the League tab.",
+        }
+    if not settings.has_yahoo_credentials:
+        return {
+            "connected": False,
+            "demo_mode": False,
+            "detail": "Not connected to Yahoo yet. Use 'Connect Yahoo' on the League tab.",
+        }
+    if settings.yahoo_league_id is None:
+        return {
+            "connected": False,
+            "demo_mode": False,
+            "detail": "Connected, but no league chosen. Pick one on the League tab.",
+        }
+    try:
+        return {"demo_mode": False, **build_yahoo_client(settings).check_connection()}
+    except (YahooConnectionError, YahooAuthError) as exc:
         return {"connected": False, "demo_mode": False, "detail": str(exc)}
 
 

@@ -2,12 +2,16 @@
  * Phase 1 -- League Settings.
  *
  * The point of this screen is verification: every rule the ranking engine uses
- * is shown here, straight from ESPN, so you can confirm the board is being
- * built from YOUR league before you trust a single recommendation.
+ * is shown here, straight from the platform, so you can confirm the board is
+ * being built from YOUR league before you trust a single recommendation.
+ *
+ * It is also where the platform is chosen. ESPN and Yahoo are alternatives --
+ * a league lives on one of them -- so the connection card swaps rather than
+ * stacking both sets of credentials on screen.
  */
 
 import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { api, type YahooLeagueOption } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -149,6 +153,390 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
       {result && (
         <div style={{ marginTop: 10 }}>
           <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * Which platform this install reads.
+ *
+ * Shown above the connection card because picking the wrong one is the single
+ * failure that looks like success: the app imports *something* and every
+ * number is quietly about the wrong league.
+ */
+function PlatformPicker({ onChanged }: { onChanged: () => void }) {
+  const config = useAsync(() => api.config(), [])
+  const [saving, setSaving] = useState(false)
+  const platform = config.data?.platform ?? 'espn'
+
+  async function choose(next: 'espn' | 'yahoo') {
+    if (next === platform) return
+    setSaving(true)
+    try {
+      await api.saveConfig({ platform: next })
+      config.reload()
+      onChanged()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card title="Platform">
+      <div className="row" style={{ gap: 8 }}>
+        <button
+          className={`btn block ${platform === 'espn' ? 'primary' : ''}`}
+          disabled={saving}
+          onClick={() => choose('espn')}
+        >
+          ESPN
+        </button>
+        <button
+          className={`btn block ${platform === 'yahoo' ? 'primary' : ''}`}
+          disabled={saving}
+          onClick={() => choose('yahoo')}
+        >
+          Yahoo
+        </button>
+      </div>
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        Everything past the import — rankings, lineups, waivers, trades — works the same
+        on either. Switching platforms means importing that league again.
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * Connecting a Yahoo account.
+ *
+ * Yahoo has no cookie shortcut, so this is three steps rather than one: a free
+ * app registered at developer.yahoo.com, Yahoo's approval screen, and the code
+ * it hands back. Once done it stays done -- the token refreshes itself.
+ */
+function YahooConnectionForm({ onSaved }: { onSaved: () => void }) {
+  const status = useAsync(() => api.yahooStatus(), [])
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [redirect, setRedirect] = useState('')
+  const [code, setCode] = useState('')
+  const [authUrl, setAuthUrl] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const [leagues, setLeagues] = useState<YahooLeagueOption[] | null>(null)
+
+  const current = status.data
+  const connected = Boolean(current?.connected)
+  const appConfigured = Boolean(current?.app_configured)
+
+  async function saveApp() {
+    setBusy('app')
+    setNote(null)
+    try {
+      await api.saveYahooApp({
+        yahoo_client_id: clientId.trim(),
+        yahoo_client_secret: clientSecret.trim(),
+        yahoo_redirect_uri: redirect.trim() || 'oob',
+      })
+      setClientId('')
+      setClientSecret('')
+      status.reload()
+      setNote({ ok: true, text: 'App saved. Now connect your Yahoo account.' })
+      onSaved()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function startAuth() {
+    setBusy('auth')
+    setNote(null)
+    try {
+      const result = await api.startYahooAuth()
+      setAuthUrl(result.authorize_url)
+      window.open(result.authorize_url, '_blank', 'noopener')
+      setNote({ ok: true, text: result.instructions })
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function completeAuth() {
+    setBusy('code')
+    setNote(null)
+    try {
+      await api.completeYahooAuth(code.trim())
+      setCode('')
+      setAuthUrl('')
+      status.reload()
+      setNote({ ok: true, text: 'Connected to Yahoo. Now pick your league.' })
+      await loadLeagues()
+      onSaved()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function loadLeagues() {
+    setBusy('leagues')
+    try {
+      const result = await api.yahooLeagues()
+      setLeagues(result.leagues)
+      if (!result.leagues.length) {
+        setNote({ ok: false, text: 'Yahoo returned no leagues for this account.' })
+      } else if (!result.filtered_to_season) {
+        setNote({
+          ok: false,
+          text: `No leagues for ${result.season}. The seasons below are what this account is in — check the season setting.`,
+        })
+      }
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function chooseLeague(leagueId: number) {
+    setBusy('choose')
+    setNote(null)
+    try {
+      const response = await api.saveConfig({ platform: 'yahoo', yahoo_league_id: leagueId })
+      status.reload()
+      if (response.connection?.connected) {
+        setNote({ ok: true, text: `Connected to "${response.connection.league_name}". Import it below.` })
+      } else if (response.connection) {
+        setNote({ ok: false, text: response.connection.detail ?? 'Could not reach Yahoo.' })
+      }
+      onSaved()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function disconnect() {
+    setBusy('disconnect')
+    try {
+      await api.disconnectYahoo()
+      setLeagues(null)
+      status.reload()
+      onSaved()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Card title="Yahoo connection">
+      <div className="small" style={{ marginBottom: 10 }}>
+        {connected ? (
+          <>
+            Connected
+            {current?.league_id ? (
+              <>
+                {' '}· league <strong>{current.league_id}</strong> · {current.season}
+              </>
+            ) : (
+              <span style={{ color: 'var(--warn)' }}> · no league chosen yet</span>
+            )}
+            {current?.connection?.league_name && (
+              <div className="tiny faint">{current.connection.league_name}</div>
+            )}
+          </>
+        ) : (
+          <span className="muted">
+            {appConfigured
+              ? 'App registered. Connect your Yahoo account to continue.'
+              : 'Yahoo needs a free developer app before it will hand over league data.'}
+          </span>
+        )}
+      </div>
+
+      {!connected && (
+        <>
+          <div className="tiny faint" style={{ marginBottom: 8 }}>
+            Step 1 — create an app at developer.yahoo.com/apps/create (Fantasy Sports,
+            Read permission), then paste its two values here.
+          </div>
+          <label className="tiny faint">
+            CLIENT ID {appConfigured && <span className="muted">(stored — leave blank to keep)</span>}
+          </label>
+          <input
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="dj0yJmk9..."
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">CLIENT SECRET</label>
+          <input
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={appConfigured ? '••••••••••••  (stored)' : 'Paste the client secret'}
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">
+            REDIRECT URI <span className="muted">(leave blank for "oob")</span>
+          </label>
+          <input
+            type="text"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder={current?.redirect_uri ?? 'oob'}
+            value={redirect}
+            onChange={(e) => setRedirect(e.target.value)}
+            style={{ marginBottom: 10 }}
+          />
+          <button
+            className="btn block"
+            onClick={saveApp}
+            disabled={busy !== null || !clientId.trim() || !clientSecret.trim()}
+          >
+            {busy === 'app' ? 'Saving…' : 'Save Yahoo app'}
+          </button>
+
+          <div className="tiny faint" style={{ margin: '12px 0 8px' }}>
+            Step 2 — approve access at Yahoo, then paste the code it shows you.
+          </div>
+          <button
+            className="btn primary block"
+            onClick={startAuth}
+            disabled={busy !== null || !appConfigured}
+          >
+            {busy === 'auth' ? 'Opening Yahoo…' : 'Connect Yahoo'}
+          </button>
+          {authUrl && (
+            <div className="tiny faint" style={{ marginTop: 6, wordBreak: 'break-all' }}>
+              Didn't open?{' '}
+              <a href={authUrl} target="_blank" rel="noreferrer">
+                Use this link
+              </a>
+              .
+            </div>
+          )}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="Paste the code from Yahoo"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+            <button
+              className="btn"
+              onClick={completeAuth}
+              disabled={busy !== null || !code.trim()}
+            >
+              {busy === 'code' ? 'Connecting…' : 'Finish'}
+            </button>
+          </div>
+        </>
+      )}
+
+      {connected && (
+        <>
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn block" onClick={loadLeagues} disabled={busy !== null}>
+              {busy === 'leagues' ? 'Loading…' : 'Show my leagues'}
+            </button>
+            <button className="btn block" onClick={disconnect} disabled={busy !== null}>
+              Disconnect
+            </button>
+          </div>
+
+          {leagues && leagues.length > 0 && (
+            <select
+              value={current?.league_id ?? ''}
+              disabled={busy !== null}
+              onChange={(event) =>
+                event.target.value && chooseLeague(Number(event.target.value))
+              }
+              style={{ marginTop: 10 }}
+            >
+              <option value="">Pick your league…</option>
+              {leagues.map((entry) => (
+                <option key={entry.league_key} value={entry.league_id}>
+                  {entry.name} — {entry.season} · {entry.team_count} teams
+                </option>
+              ))}
+            </select>
+          )}
+        </>
+      )}
+
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        The client secret and the tokens are stored in your local database and are never
+        sent back to the browser. Yahoo access is read-only.
+      </div>
+
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
+ * ESPN's public projections.
+ *
+ * Yahoo publishes no projections at all -- not one projected stat for anybody
+ * -- so a Yahoo league has nothing to rank until this runs. It needs no
+ * credentials: ESPN publishes projections for a default league, and their raw
+ * stat lines get re-scored under the Yahoo league's own rules like every other
+ * source.
+ */
+function PublicProjectionsCard({ onImported }: { onImported: () => void }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function run() {
+    setBusy(true)
+    setNote(null)
+    try {
+      const report = await api.importPublicProjections()
+      const base = `Matched ${report.matched} of ${report.received} players — ${Math.round(
+        report.coverage * 100,
+      )}% of your player pool.`
+      setNote({ ok: report.enabled, text: report.warning ? `${base} ${report.warning}` : base })
+      onImported()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="Projections for this league">
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        Yahoo publishes ownership, ADP and rosters but no projections, so the rankings run
+        on ESPN's public projections instead — re-scored under your Yahoo league's rules.
+        This runs automatically on import; use the button after ESPN updates its numbers.
+      </div>
+      <button className="btn primary block" onClick={run} disabled={busy}>
+        {busy ? 'Importing…' : 'Refresh projections'}
+      </button>
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
         </div>
       )}
     </Card>
@@ -462,6 +850,7 @@ function MyTeamPicker() {
 
 export default function LeagueSettings({ onChange }: { onChange?: () => void }) {
   const health = useAsync(() => api.health(), [])
+  const config = useAsync(() => api.config(), [])
   const league = useAsync(() => api.league().catch(() => null), [])
   const history = useAsync(() => api.history().catch(() => null), [])
   const [busy, setBusy] = useState<string | null>(null)
@@ -513,13 +902,36 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
 
       <FantasyProsCard onImported={() => onChange?.()} />
 
-      <EspnConnectionForm
-        onSaved={() => {
+      {config.data?.platform === 'yahoo' && (
+        <PublicProjectionsCard onImported={() => onChange?.()} />
+      )}
+
+      <PlatformPicker
+        onChanged={() => {
+          config.reload()
           health.reload()
-          league.reload()
           onChange?.()
         }}
       />
+
+      {config.data?.platform === 'yahoo' ? (
+        <YahooConnectionForm
+          onSaved={() => {
+            config.reload()
+            health.reload()
+            league.reload()
+            onChange?.()
+          }}
+        />
+      ) : (
+        <EspnConnectionForm
+          onSaved={() => {
+            health.reload()
+            league.reload()
+            onChange?.()
+          }}
+        />
+      )}
 
       <UpdateCard />
 
@@ -684,9 +1096,38 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
 
           <Card title="Scoring rules used by the engine">
             <div className="small muted" style={{ marginBottom: 8 }}>
-              {info.scoring.rules.length} active rules of {info.scoring.rule_count} returned by
-              ESPN. Every projection on the board is computed from these.
+              {info.scoring.rules.length} active rules of {info.scoring.rule_count} returned by{' '}
+              {info.source === 'yahoo' ? 'Yahoo' : 'ESPN'}. Every projection on the board is
+              computed from these.
             </div>
+
+            {/* Yahoo numbers its stat categories differently, so they are
+                translated on import. Where that translation is lossy, saying so
+                here is the difference between a board you can check and one you
+                have to trust. */}
+            {info.scoring.translation && (
+              <>
+                {info.scoring.translation.combined.length > 0 && (
+                  <Banner kind="warn">
+                    {info.scoring.translation.combined.length} of your categories share a
+                    scoring category here: {info.scoring.translation.combined.join('; ')}.
+                  </Banner>
+                )}
+                {info.scoring.translation.approximate.length > 0 && (
+                  <div className="tiny faint" style={{ marginBottom: 8 }}>
+                    Band edges differ slightly for:{' '}
+                    {info.scoring.translation.approximate.join(', ')}.
+                  </div>
+                )}
+                {info.scoring.translation.unmapped.length > 0 && (
+                  <Banner kind="warn">
+                    No projection source covers{' '}
+                    {info.scoring.translation.unmapped.join(', ')}, so those rules score
+                    zero on the board. They are listed below for completeness.
+                  </Banner>
+                )}
+              </>
+            )}
             <div className="table-wrap">
               <table>
                 <thead>

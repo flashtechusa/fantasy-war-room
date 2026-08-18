@@ -63,6 +63,7 @@ MULTI_SLOT_ELIGIBILITY = {
     "FLEX": ["RB", "WR", "TE"],
     "RB/WR": ["RB", "WR"],
     "WR/TE": ["WR", "TE"],
+    "RB/TE": ["RB", "TE"],
     "OP": ["QB", "RB", "WR", "TE"],
     "TQB": ["QB"],
 }

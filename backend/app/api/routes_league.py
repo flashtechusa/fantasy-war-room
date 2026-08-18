@@ -13,11 +13,13 @@ from ..config import Settings
 from ..db import get_db
 from ..espn.client import EspnConnectionError
 from ..models import HistoricalDraftPick, League, Player, ProjectionSource
+from ..projections.espn_public import EspnPublicError
 from ..projections.fantasypros import FantasyProsError
 from ..services import board as board_service
 from ..services import projections as projection_service
 from ..services.importer import import_league, import_players
 from ..services.provider import build_provider
+from ..yahoo.client import YahooConnectionError
 from .deps import league_dep, settings_dep
 from .serializers import serialize_history, serialize_league
 
@@ -62,7 +64,7 @@ def run_import(
             include_players=payload.include_players,
             include_history=payload.include_history,
         )
-    except EspnConnectionError as exc:
+    except (EspnConnectionError, YahooConnectionError) as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface the real reason to the UI
         log.exception("League import failed")
@@ -70,6 +72,21 @@ def run_import(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Import failed: {exc}",
         ) from exc
+
+    projections = None
+    if payload.include_players and league.source not in {"espn", "demo"}:
+        # A platform that publishes no projections of its own (Yahoo) would
+        # otherwise leave every player valued at zero, which looks like a broken
+        # app rather than a missing data source. Pulling ESPN's public
+        # projections here is what makes the first import land on a usable
+        # board. It is best-effort: a failure is reported, not fatal, because
+        # the league itself imported fine.
+        try:
+            projections = projection_service.import_espn_public(session, league)
+            session.commit()
+        except EspnPublicError as exc:
+            log.warning("Could not load public projections: %s", exc)
+            projections = {"source": "espn_public", "error": str(exc)}
 
     board_service.clear_cache()
     player_count = session.scalar(
@@ -83,6 +100,7 @@ def run_import(
             league, board_service.league_scoring(league), board_service.league_shape(league)
         ),
         "players_imported": player_count,
+        "projections": projections,
     }
 
 
@@ -95,7 +113,7 @@ def refresh_players(
     """Re-pull just the player pool (ADP and injuries move; league rules don't)."""
     try:
         count = import_players(session, league, build_provider(settings), settings)
-    except EspnConnectionError as exc:
+    except (EspnConnectionError, YahooConnectionError) as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     board_service.clear_cache()
     return {"players_imported": count, "season": league.season}
@@ -156,6 +174,33 @@ def import_fantasypros_projections(
     except FantasyProsError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+        ) from exc
+
+    session.commit()
+    board_service.clear_cache()
+    return report
+
+
+@router.post("/projections/espn-public")
+def import_public_projections(
+    weight: float = Query(1.0, ge=0.0, le=10.0),
+    limit: int = Query(900, ge=50, le=2000),
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+) -> dict:
+    """Pull ESPN's public projections and match them onto the imported pool.
+
+    Needs no credentials, and is how a Yahoo league gets projections at all --
+    Yahoo publishes none. Harmless on an ESPN league too, where it becomes a
+    second opinion to blend.
+    """
+    try:
+        report = projection_service.import_espn_public(
+            session, league, weight=weight, limit=limit
+        )
+    except EspnPublicError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
         ) from exc
 
     session.commit()

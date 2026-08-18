@@ -1,9 +1,9 @@
 # Fantasy War Room
 
-An AI-assisted draft and season-management tool for a single ESPN Fantasy Football
-league. It imports **your** league's actual scoring and roster rules, builds its own
-player valuations from those rules, and explains every recommendation in plain
-English.
+An AI-assisted draft and season-management tool for a single fantasy football
+league on **ESPN or Yahoo**. It imports **your** league's actual scoring and roster
+rules, builds its own player valuations from those rules, and explains every
+recommendation in plain English.
 
 The design rule throughout: **no black boxes**. Every number on the board — the
 0-100 Draft Score, the VOR, the replacement level, the probability a player is gone
@@ -68,20 +68,22 @@ Then enter your league on the **League** tab.
 
 ### Credentials
 
-You never have to edit a file. The **League** tab has a form for your league id,
-season, SWID and espn_s2; it saves them locally, tests the connection
-immediately, and never sends them back to the browser. Environment variables
-(`.env`, Codespaces secrets, Docker) still work and are used as the fallback.
+You never have to edit a file. The **League** tab picks the platform and has a
+form for its credentials — league id, season, SWID and espn_s2 for ESPN; a
+developer app and a one-time OAuth handshake for Yahoo. It saves them locally,
+tests the connection immediately, and never sends them back to the browser.
+Environment variables (`.env`, Codespaces secrets, Docker) still work and are
+used as the fallback.
 
 There is no public hosted version — the app runs on infrastructure you control,
-which is what keeps your ESPN session cookies under your control.
+which is what keeps your session cookies and tokens under your control.
 
 ---
 
 ## Contents
 
 1. [Installation](#1-installation)
-2. [ESPN credentials](#2-espn-credentials)
+2. [ESPN credentials](#2-espn-credentials) · [Yahoo leagues](#yahoo-leagues)
 3. [Starting the application](#3-starting-the-application)
 4. [Importing a league](#4-importing-a-league)
 5. [Running draft simulations](#5-running-draft-simulations)
@@ -152,6 +154,32 @@ pasted straight in. The `FWR_`-prefixed name wins if both are set. Point
 `FWR_ENV_FILE` at a different file to keep a second league's config side by side.
 
 **Public leagues** need only the league id and season.
+
+### Yahoo leagues
+
+Set `FWR_PLATFORM=yahoo` (or pick Yahoo on the League tab) and the app reads a
+Yahoo league instead. Two differences are worth knowing before you start:
+
+* **Yahoo needs OAuth, not cookies.** A free app registered at
+  [developer.yahoo.com](https://developer.yahoo.com/apps/create) gives you a
+  Client ID and Secret; the League tab walks through the handshake, and the
+  token refreshes itself afterwards.
+* **Yahoo publishes no projections at all.** The player pool, rosters,
+  ownership and ADP come from Yahoo; the projections come from ESPN's public
+  feed (no credentials required) and are re-scored under your Yahoo league's own
+  rules. A FantasyPros key improves coverage further.
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `FWR_PLATFORM` | yes | `yahoo` |
+| `FWR_YAHOO_LEAGUE_ID` | yes | From your league URL: `…/f1/**123456**` |
+| `FWR_YAHOO_CLIENT_ID` | yes | From your Yahoo developer app |
+| `FWR_YAHOO_CLIENT_SECRET` | yes | From your Yahoo developer app |
+| `FWR_YAHOO_REDIRECT_URI` | no | `oob` (default) or a URL registered on the app |
+
+**[docs/yahoo.md](docs/yahoo.md)** covers the whole setup, including what to put
+on Yahoo's API access application form and how Yahoo's scoring categories are
+translated onto the engine's stat vocabulary.
 
 ### Verify before you trust it
 
@@ -583,6 +611,15 @@ backend/app/
     client.py          defensive wrapper over cwendt94/espn-api
     demo.py            synthetic league + player pool
     constants.py       ESPN id/label mappings and normalisation
+  yahoo/
+    client.py          Yahoo league/teams/draft/players, same interface as ESPN
+    oauth.py           three-legged OAuth with self-refreshing tokens
+    payload.py         reading Yahoo's transliterated-XML JSON
+    constants.py       Yahoo -> ESPN stat id and slot translation
+  projections/
+    espn_public.py     ESPN's credential-free projections (what Yahoo lacks)
+    fantasypros.py     optional second source, bring your own key
+    matching.py        conservative cross-provider player matching
   engine/
     scoring.py         apply league scoring rules to raw stat lines
     league_shape.py    normalised roster construction
@@ -599,12 +636,14 @@ frontend/src/
   pages/               LeagueSettings, DraftBoard, LiveDraft, MyTeam, Simulator
   components.tsx       player cards, score bars, bottom sheet
   styles.css           mobile-first design system
-tests/                 283 tests, no network or credentials required
+tests/                 549 tests, no network or credentials required
 ```
 
 ### Credits
 
-Built on [cwendt94/espn-api](https://github.com/cwendt94/espn-api) for ESPN access.
+Built on [cwendt94/espn-api](https://github.com/cwendt94/espn-api) for ESPN access;
+Yahoo is read through its
+[Fantasy Sports API](https://developer.yahoo.com/fantasysports/guide/) directly.
 Architecture ideas from [KBThree13/mcp_espn_ff](https://github.com/KBThree13/mcp_espn_ff);
 valuation concepts informed by [jjti/ff](https://github.com/jjti/ff) (VOR as the
 ranking backbone) and [elliott-imhoff/optimal-adp](https://github.com/elliott-imhoff/optimal-adp)

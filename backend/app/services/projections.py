@@ -18,6 +18,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..models import League, Player, PlayerProjection, ProjectionSource
+from ..projections.espn_public import SOURCE_KEY as PUBLIC_SOURCE_KEY
+from ..projections.espn_public import fetch_projections
 from ..projections.fantasypros import (
     SOURCE_KEY,
     FantasyProsClient,
@@ -115,6 +117,81 @@ def store_projections(
 #: against that same distorted pool. FantasyPros' free tier truncates responses
 #: to roughly ten players a position, which lands well under this.
 MIN_COVERAGE = 0.5
+
+
+def _has_other_projections(session: Session, league: League, source_key: str) -> bool:
+    """Does any *other* source already project players in this season?"""
+    return bool(
+        session.scalar(
+            select(func.count(PlayerProjection.id))
+            .join(Player, Player.id == PlayerProjection.player_id)
+            .where(
+                Player.season == league.season,
+                PlayerProjection.source_key != source_key,
+            )
+        )
+    )
+
+
+def import_espn_public(
+    session: Session,
+    league: League,
+    *,
+    weight: float = 1.0,
+    limit: int = 900,
+) -> dict:
+    """Pull ESPN's public projections and attach them by name.
+
+    This is what makes a Yahoo league usable: Yahoo publishes no projections,
+    so without a source like this every player is worth zero and the board is
+    just an alphabet.
+
+    The coverage gate below is deliberately *not* applied when this is the only
+    source there is. That gate exists to stop a partial source distorting a
+    blend -- but with nothing to blend against, a partial projection set beats
+    no projections at all, so it is kept and the gap is reported instead.
+    """
+    source = ensure_source(session, PUBLIC_SOURCE_KEY, "ESPN projections (public)", weight)
+    players = fetch_projections(league.season, limit=limit)
+    report = store_projections(session, league, players, PUBLIC_SOURCE_KEY)
+
+    pool_size = session.scalar(
+        select(func.count(Player.id)).where(Player.season == league.season)
+    ) or 0
+    coverage = (report["matched"] / pool_size) if pool_size else 0.0
+    report["pool_size"] = pool_size
+    report["coverage"] = round(coverage, 3)
+
+    sole_source = not _has_other_projections(session, league, PUBLIC_SOURCE_KEY)
+    if coverage < MIN_COVERAGE and not sole_source:
+        source.enabled = False
+        report["enabled"] = False
+        report["warning"] = (
+            f"Only {report['matched']} of {pool_size} players matched ({coverage:.0%}). "
+            "Blending a partial source distorts the rankings, so it has been left "
+            "switched off."
+        )
+    else:
+        source.enabled = True
+        report["enabled"] = True
+        if coverage < MIN_COVERAGE:
+            report["warning"] = (
+                f"{report['matched']} of {pool_size} players matched ({coverage:.0%}). "
+                "This is the only projection source available for this league, so it is "
+                "switched on -- but players it did not cover have no projection and will "
+                "rank at the bottom. Names that differ between platforms are the usual "
+                "cause; adding FantasyPros fills most of the gap."
+            )
+
+    session.flush()
+    log.info(
+        "ESPN public projections: %s received, %s matched, %.0f%% coverage, enabled=%s",
+        report["received"],
+        report["matched"],
+        coverage * 100,
+        report["enabled"],
+    )
+    return report
 
 
 def import_fantasypros(

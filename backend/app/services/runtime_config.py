@@ -18,10 +18,19 @@ from ..models import AppConfig
 
 #: Keys that may be set at runtime, mapped to the Settings field they override.
 OVERRIDABLE = {
+    "platform": str,
     "espn_league_id": int,
     "espn_season": int,
     "espn_swid": str,
     "espn_s2": str,
+    "yahoo_league_id": int,
+    "yahoo_client_id": str,
+    "yahoo_client_secret": str,
+    "yahoo_redirect_uri": str,
+    "yahoo_access_token": str,
+    "yahoo_refresh_token": str,
+    "yahoo_token_expires": float,
+    "yahoo_guid": str,
     "demo_mode": bool,
     "my_team_id": int,
     "my_draft_slot": int,
@@ -30,7 +39,14 @@ OVERRIDABLE = {
 }
 
 #: Never returned by the API.
-SECRET_KEYS = {"espn_swid", "espn_s2", "fantasypros_api_key"}
+SECRET_KEYS = {
+    "espn_swid",
+    "espn_s2",
+    "fantasypros_api_key",
+    "yahoo_client_secret",
+    "yahoo_access_token",
+    "yahoo_refresh_token",
+}
 
 
 def _coerce(key: str, raw: str):
@@ -39,6 +55,8 @@ def _coerce(key: str, raw: str):
         return None
     if kind is int:
         return int(raw)
+    if kind is float:
+        return float(raw)
     if kind is bool:
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     return raw
@@ -106,6 +124,7 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         return "ui" if key in overrides else "environment"
 
     return {
+        "platform": settings.platform,
         "espn_league_id": settings.espn_league_id,
         "espn_season": settings.espn_season,
         "demo_mode": settings.demo_mode,
@@ -117,5 +136,12 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "fantasypros_key_set": bool(settings.fantasypros_api_key),
         "has_private_credentials": settings.has_espn_credentials,
         "ready_for_espn": settings.can_reach_espn,
+        # Yahoo. The tokens themselves are never returned -- only whether the
+        # handshake has happened and whether the league can be read.
+        "yahoo_league_id": settings.yahoo_league_id,
+        "yahoo_redirect_uri": settings.yahoo_redirect_uri,
+        "yahoo_app_configured": settings.has_yahoo_app,
+        "yahoo_connected": settings.has_yahoo_credentials,
+        "ready_for_yahoo": settings.can_reach_yahoo,
         "sources": {key: source(key) for key in OVERRIDABLE},
     }

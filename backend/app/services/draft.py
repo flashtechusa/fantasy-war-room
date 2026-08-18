@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from ..config import Settings, get_settings
 from ..engine.draft_math import round_of, pick_in_round, slot_for_pick
 from ..models import DraftPick, DraftSession, League, Player, utcnow
-from .provider import build_espn_client
+from .provider import build_espn_client, build_yahoo_client
 
 log = logging.getLogger(__name__)
 
@@ -175,13 +175,15 @@ def set_my_slot(session: Session, draft: DraftSession, slot: int) -> DraftSessio
 def sync_from_espn(
     session: Session, draft: DraftSession, league: League, settings: Settings | None = None
 ) -> dict:
-    """Pull ESPN's draft board and reconcile it into our picks.
+    """Pull the platform's draft board and reconcile it into our picks.
 
-    Only *adds* picks we don't have; manual entries are never clobbered.  ESPN
-    is polled at most once per `FWR_DRAFT_POLL_INTERVAL` seconds by the caller.
+    Only *adds* picks we don't have; manual entries are never clobbered.  The
+    platform is polled at most once per `FWR_DRAFT_POLL_INTERVAL` seconds by
+    the caller.
     """
     settings = settings or get_settings()
-    client = build_espn_client(settings)
+    platform = "yahoo" if settings.is_yahoo else "espn"
+    client = build_yahoo_client(settings) if settings.is_yahoo else build_espn_client(settings)
     espn_picks = client.live_draft_picks()
 
     known_players = {pick.espn_player_id for pick in draft.picks}
@@ -202,7 +204,7 @@ def sync_from_espn(
                 draft,
                 espn_player_id=int(player_id),
                 overall_pick=int(overall),
-                source="espn",
+                source=platform,
                 league_season=league.season,
             )
             known_players.add(player_id)
@@ -217,6 +219,7 @@ def sync_from_espn(
 
     return {
         "added": added,
+        "platform": platform,
         "total_espn_picks": len(espn_picks),
         "skipped": skipped,
         "synced_at": draft.last_synced_at,

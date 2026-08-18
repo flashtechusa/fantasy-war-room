@@ -22,6 +22,12 @@ class Settings(BaseSettings):
         env_file=(REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        # Fields carrying a `validation_alias` are otherwise settable *only* by
+        # that alias, which quietly broke `platform` when the runtime overlay
+        # re-validated a dump keyed by field name. Most fields got away with it
+        # because their aliases match the field name case-insensitively; that
+        # is luck, not design.
+        populate_by_name=True,
     )
 
     # --- ESPN -------------------------------------------------------------
@@ -35,7 +41,9 @@ class Settings(BaseSettings):
     )
     espn_season: int = Field(
         default=2026,
-        validation_alias=AliasChoices("FWR_ESPN_SEASON", "ESPN_SEASON", "ESPN_YEAR"),
+        validation_alias=AliasChoices(
+            "FWR_ESPN_SEASON", "FWR_SEASON", "ESPN_SEASON", "ESPN_YEAR", "SEASON"
+        ),
     )
     espn_swid: str | None = Field(
         default=None,
@@ -45,6 +53,51 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("FWR_ESPN_S2", "ESPN_S2", "ESPN_COOKIE_S2"),
     )
+
+    # --- Platform ---------------------------------------------------------
+    #: Which fantasy platform this install reads: `espn` or `yahoo`.
+    #:
+    #: The two are alternatives, not a blend -- a league lives on one of them --
+    #: so this picks which set of credentials below is used. Everything past the
+    #: import is platform-agnostic.
+    platform: str = Field(
+        default="espn",
+        validation_alias=AliasChoices("FWR_PLATFORM", "FANTASY_PLATFORM"),
+    )
+
+    # --- Yahoo ------------------------------------------------------------
+    # Yahoo has no cookie shortcut: reading a league needs an app registered at
+    # developer.yahoo.com (free) plus a one-time OAuth handshake. The tokens
+    # that come out of it are stored like any other credential -- in `.env` or
+    # in the local database -- and are never returned by the API.
+    yahoo_league_id: int | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_YAHOO_LEAGUE_ID", "YAHOO_LEAGUE_ID"),
+    )
+    yahoo_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FWR_YAHOO_CLIENT_ID", "YAHOO_CLIENT_ID", "YAHOO_CONSUMER_KEY"
+        ),
+    )
+    yahoo_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "FWR_YAHOO_CLIENT_SECRET", "YAHOO_CLIENT_SECRET", "YAHOO_CONSUMER_SECRET"
+        ),
+    )
+    #: `oob` means Yahoo shows a code to paste back in, which is what works for
+    #: an app running on a laptop with no public HTTPS address.
+    yahoo_redirect_uri: str = Field(
+        default="oob",
+        validation_alias=AliasChoices("FWR_YAHOO_REDIRECT_URI", "YAHOO_REDIRECT_URI"),
+    )
+    yahoo_access_token: str | None = None
+    yahoo_refresh_token: str | None = None
+    #: Unix timestamp the access token expires at.
+    yahoo_token_expires: float = 0.0
+    #: Yahoo's id for the connected account.
+    yahoo_guid: str | None = None
 
     # --- Additional projection sources ------------------------------------
     #: Bring your own key. Nothing is bundled, and the FantasyPros source stays
@@ -93,7 +146,21 @@ class Settings(BaseSettings):
             v = v + "}"
         return v
 
-    @field_validator("espn_s2", "my_team_name")
+    @field_validator("platform")
+    @classmethod
+    def _normalise_platform(cls, v: str) -> str:
+        value = (v or "").strip().lower()
+        return value if value in {"espn", "yahoo"} else "espn"
+
+    @field_validator(
+        "espn_s2",
+        "my_team_name",
+        "yahoo_client_id",
+        "yahoo_client_secret",
+        "yahoo_access_token",
+        "yahoo_refresh_token",
+        "yahoo_guid",
+    )
     @classmethod
     def _blank_to_none(cls, v: str | None) -> str | None:
         if v is None:
@@ -114,6 +181,29 @@ class Settings(BaseSettings):
     def can_reach_espn(self) -> bool:
         """A league id is the minimum needed to try a (public) league."""
         return not self.demo_mode and self.espn_league_id is not None
+
+    @property
+    def is_yahoo(self) -> bool:
+        return self.platform == "yahoo"
+
+    @property
+    def has_yahoo_app(self) -> bool:
+        """True once a Yahoo developer app has been configured."""
+        return bool(self.yahoo_client_id and self.yahoo_client_secret)
+
+    @property
+    def has_yahoo_credentials(self) -> bool:
+        """True once the OAuth handshake has completed."""
+        return bool(self.yahoo_access_token and self.yahoo_refresh_token)
+
+    @property
+    def can_reach_yahoo(self) -> bool:
+        return (
+            not self.demo_mode
+            and self.yahoo_league_id is not None
+            and self.has_yahoo_app
+            and self.has_yahoo_credentials
+        )
 
     def sqlite_path(self) -> Path | None:
         if not self.database_url.startswith("sqlite"):

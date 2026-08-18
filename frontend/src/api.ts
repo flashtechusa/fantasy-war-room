@@ -215,6 +215,11 @@ export interface LeagueInfo {
       points_overrides: Record<string, number>
     }[]
     rule_count: number
+    translation?: {
+      combined: string[]
+      unmapped: string[]
+      approximate: string[]
+    } | null
   }
   roster: {
     starting_slots: Record<string, number>
@@ -270,6 +275,13 @@ export interface HealthInfo {
   status: string
   season: number
   demo_mode: boolean
+  platform: 'espn' | 'yahoo'
+  yahoo: {
+    league_id_configured: boolean
+    app_configured: boolean
+    connected: boolean
+    reachable_config: boolean
+  }
   espn: {
     league_id_configured: boolean
     private_credentials_configured: boolean
@@ -504,6 +516,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export interface ConfigInfo {
+  platform: 'espn' | 'yahoo'
   espn_league_id: number | null
   espn_season: number
   demo_mode: boolean
@@ -515,7 +528,49 @@ export interface ConfigInfo {
   fantasypros_key_set: boolean
   has_private_credentials: boolean
   ready_for_espn: boolean
+  yahoo_league_id: number | null
+  yahoo_redirect_uri: string
+  yahoo_app_configured: boolean
+  yahoo_connected: boolean
+  ready_for_yahoo: boolean
   sources: Record<string, string>
+}
+
+export interface YahooStatus {
+  platform: 'espn' | 'yahoo'
+  app_configured: boolean
+  connected: boolean
+  league_id: number | null
+  season: number
+  redirect_uri: string
+  out_of_band: boolean
+  config: ConfigInfo
+  connection: { connected: boolean; league_name?: string; detail?: string } | null
+}
+
+export interface YahooLeagueOption {
+  league_id: number
+  league_key: string
+  name: string
+  season: number
+  team_count: number
+  scoring_type: string
+  url: string
+}
+
+export interface ProjectionImportReport {
+  source: string
+  received: number
+  matched: number
+  unmatched_count: number
+  ambiguous_count: number
+  matched_sample: string[]
+  unmatched_sample: string[]
+  ambiguous_sample: string[]
+  pool_size: number
+  coverage: number
+  enabled: boolean
+  warning?: string
 }
 
 export interface ConfigSaveResult {
@@ -548,6 +603,44 @@ export const api = {
   espnHealth: () =>
     request<{ connected: boolean; demo_mode: boolean; detail?: string; league_name?: string }>(
       '/api/health/espn',
+    ),
+  yahooHealth: () =>
+    request<{ connected: boolean; demo_mode: boolean; detail?: string; league_name?: string }>(
+      '/api/health/yahoo',
+    ),
+
+  // --- Yahoo -----------------------------------------------------------
+  // Yahoo needs an OAuth handshake rather than a pasted cookie: register an
+  // app, follow Yahoo's link, paste the code back. These are its three steps
+  // plus a league picker, so nobody has to hunt for a league id.
+  yahooStatus: () => request<YahooStatus>('/api/yahoo/status'),
+  saveYahooApp: (body: {
+    yahoo_client_id: string
+    yahoo_client_secret: string
+    yahoo_redirect_uri?: string
+    yahoo_league_id?: number
+  }) =>
+    request<{ saved: boolean; config: ConfigInfo }>('/api/yahoo/app', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  startYahooAuth: () =>
+    request<{
+      authorize_url: string
+      redirect_uri: string
+      out_of_band: boolean
+      instructions: string
+    }>('/api/yahoo/auth/start', { method: 'POST' }),
+  completeYahooAuth: (code: string) =>
+    request<{ connected: boolean; config: ConfigInfo }>('/api/yahoo/auth/complete', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
+  disconnectYahoo: () =>
+    request<{ connected: boolean; config: ConfigInfo }>('/api/yahoo/auth', { method: 'DELETE' }),
+  yahooLeagues: () =>
+    request<{ season: number; leagues: YahooLeagueOption[]; filtered_to_season: boolean }>(
+      '/api/yahoo/leagues',
     ),
 
   league: () => request<LeagueInfo>('/api/league'),
@@ -608,20 +701,13 @@ export const api = {
   leagueTeams: () => request<LeagueTeamsResponse>('/api/team/league'),
 
   importFantasyPros: () =>
-    request<{
-      source: string
-      received: number
-      matched: number
-      unmatched_count: number
-      ambiguous_count: number
-      matched_sample: string[]
-      unmatched_sample: string[]
-      ambiguous_sample: string[]
-      pool_size: number
-      coverage: number
-      enabled: boolean
-      warning?: string
-    }>('/api/league/projections/fantasypros', { method: 'POST' }),
+    request<ProjectionImportReport>('/api/league/projections/fantasypros', { method: 'POST' }),
+
+  // ESPN publishes projections for a default league, readable without any
+  // credentials. That is what gives a Yahoo league numbers to rank at all --
+  // Yahoo publishes none.
+  importPublicProjections: () =>
+    request<ProjectionImportReport>('/api/league/projections/espn-public', { method: 'POST' }),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),

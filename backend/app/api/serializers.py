@@ -73,6 +73,12 @@ def serialize_league(league: League, scoring: LeagueScoring, shape: LeagueShape)
                 if rule.points != 0 or rule.points_overrides
             ],
             "rule_count": len(league.scoring_rules),
+            # How faithfully another platform's categories survived being
+            # translated onto this engine's stat vocabulary. Absent for ESPN,
+            # where there is nothing to translate. Shown rather than stored
+            # quietly: a scoring page that omits three of a league's rules is
+            # worse than one that admits it.
+            "translation": raw.get("scoring_translation"),
         },
         "roster": {
             "starting_slots": league.roster_slots or {},

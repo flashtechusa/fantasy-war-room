@@ -1,7 +1,8 @@
-"""Runtime ESPN configuration, settable from the UI.
+"""Runtime league configuration, settable from the UI.
 
-Lets you point the app at a league without editing a file -- necessary when
-you're running it somewhere you only have a browser.
+Lets you point the app at a league -- on either platform -- without editing a
+file, which is necessary when you're running it somewhere you only have a
+browser.
 """
 
 from __future__ import annotations
@@ -13,17 +14,22 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..espn.client import EspnClient, EspnConnectionError
 from ..services import board as board_service
+from ..services.provider import build_yahoo_client
 from ..services.runtime_config import (
     clear_overrides,
     describe,
     effective_settings,
     write_overrides,
 )
+from ..yahoo.client import YahooConnectionError
+from ..yahoo.oauth import YahooAuthError
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 
 class EspnConfigRequest(BaseModel):
+    #: `espn` or `yahoo`. A league lives on one platform; this says which.
+    platform: str | None = Field(default=None, pattern="^(espn|yahoo)$")
     espn_league_id: int | None = Field(default=None, ge=1)
     espn_season: int | None = Field(default=None, ge=2000, le=2100)
     espn_swid: str | None = None
@@ -33,6 +39,13 @@ class EspnConfigRequest(BaseModel):
     my_draft_slot: int | None = Field(default=None, ge=1, le=32)
     faab_remaining: int | None = Field(default=None, ge=0, le=100000)
     fantasypros_api_key: str | None = None
+
+    # Yahoo. The tokens are set by the OAuth handshake in `routes_yahoo`, not
+    # here -- these are the parts a person types.
+    yahoo_league_id: int | None = Field(default=None, ge=1)
+    yahoo_client_id: str | None = None
+    yahoo_client_secret: str | None = None
+    yahoo_redirect_uri: str | None = None
 
     # Reject unknown fields rather than dropping them. A missing field here
     # meant a saved API key was silently discarded while the app reported
@@ -51,7 +64,7 @@ def update_config(
     payload: EspnConfigRequest,
     session: Session = Depends(get_db),
 ) -> dict:
-    """Save ESPN configuration and immediately test the connection.
+    """Save league configuration and immediately test the connection.
 
     Only the fields you send are changed; send an empty string to clear one.
     """
@@ -61,7 +74,13 @@ def update_config(
     settings = effective_settings(session)
     result: dict = {"saved": True, "config": describe(session), "connection": None}
 
-    if settings.can_reach_espn:
+    if settings.is_yahoo:
+        if settings.can_reach_yahoo:
+            try:
+                result["connection"] = build_yahoo_client(settings).check_connection()
+            except (YahooConnectionError, YahooAuthError) as exc:
+                result["connection"] = {"connected": False, "detail": str(exc)}
+    elif settings.can_reach_espn:
         client = EspnClient(
             league_id=settings.espn_league_id,
             season=settings.espn_season,
