@@ -62,9 +62,14 @@ Write-Step 'Stopping the app'
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 # Task Scheduler kills cmd.exe but not always its python child, and a survivor
 # holds both the port and the files we are about to replace.
-Get-Process python -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, 'OrdinalIgnoreCase') } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+# Reading .Path on a process this account cannot inspect yields null, and
+# PowerShell still evaluates the method call on it -- so guard rather than
+# relying on -and to short-circuit.
+Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+    $exe = $null
+    try { $exe = $_.Path } catch { }
+    $exe -and $exe.StartsWith($InstallDir, 'OrdinalIgnoreCase')
+} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 Write-Ok 'Stopped.'
 

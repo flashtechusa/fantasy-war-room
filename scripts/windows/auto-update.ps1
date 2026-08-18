@@ -154,9 +154,14 @@ Get-ChildItem $backupDir -ErrorAction SilentlyContinue |
 # ------------------------------------------------------------------ update --
 Write-Log "Stopping the app"
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Get-Process python -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, 'OrdinalIgnoreCase') } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+# Reading .Path on a process this account cannot inspect yields null, and
+# PowerShell still evaluates the method call on it -- so guard rather than
+# relying on -and to short-circuit.
+Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+    $exe = $null
+    try { $exe = $_.Path } catch { }
+    $exe -and $exe.StartsWith($InstallDir, 'OrdinalIgnoreCase')
+} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 
 $zip     = Join-Path $env:TEMP 'fwr-auto.zip'
@@ -213,9 +218,14 @@ $why = if (-not $healthy) { "the app did not answer" } else { "no league was loa
 Write-Log "Update failed -- $why. Rolling back." 'ERROR'
 
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Get-Process python -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, 'OrdinalIgnoreCase') } |
-    Stop-Process -Force -ErrorAction SilentlyContinue
+# Reading .Path on a process this account cannot inspect yields null, and
+# PowerShell still evaluates the method call on it -- so guard rather than
+# relying on -and to short-circuit.
+Get-Process python -ErrorAction SilentlyContinue | Where-Object {
+    $exe = $null
+    try { $exe = $_.Path } catch { }
+    $exe -and $exe.StartsWith($InstallDir, 'OrdinalIgnoreCase')
+} | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 3
 
 Copy-Item (Join-Path $codeBackup 'backend') $InstallDir -Recurse -Force
