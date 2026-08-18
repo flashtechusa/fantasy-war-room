@@ -477,6 +477,11 @@ export interface SeasonRoster {
   teams: { espn_team_id: number; name: string; is_mine: boolean }[]
 }
 
+export interface AuthState {
+  authenticated: boolean
+  user: { username: string; display_name: string; role: string } | null
+}
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -487,6 +492,9 @@ export class ApiError extends Error {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
+    // Send the session cookie. Without this every call is anonymous and the
+    // whole app reads as signed out.
+    credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
@@ -635,6 +643,22 @@ export const api = {
       `/api/season/waivers/refresh${week ? `?week=${week}` : ''}`,
       { method: 'POST' },
     ),
+  me: () => request<AuthState>('/api/auth/me'),
+
+  login: (username: string, password: string) =>
+    request<AuthState>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+
+  logout: () => request<AuthState>('/api/auth/logout', { method: 'POST' }),
+
+  requestBeta: (body: { email: string; name?: string; note?: string }) =>
+    request<{ received: boolean }>('/api/auth/beta-request', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
   seasonRoster: (week?: number, teamId?: number) => {
     const query = new URLSearchParams()
     if (week) query.set('week', String(week))

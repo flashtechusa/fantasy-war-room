@@ -369,3 +369,60 @@ class DraftPick(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     session: Mapped[DraftSession] = relationship(back_populates="picks")
+
+
+# ---------------------------------------------------------------------------
+# Accounts
+# ---------------------------------------------------------------------------
+
+
+class User(Base):
+    """Someone who can log in.
+
+    Invite-only: there is no public registration path anywhere in the app.
+    Accounts are created by the owner, which is the whole access model for now.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(160), default="")
+    #: scrypt, salted per user. Stored as "scrypt$<salt_hex>$<hash_hex>".
+    password_hash: Mapped[str] = mapped_column(String(400), default="")
+    role: Mapped[str] = mapped_column(String(20), default="owner")  # owner|partner|client
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AuthSession(Base):
+    """A logged-in browser.
+
+    Server-side rather than a self-contained token so access can be revoked
+    the moment an account is switched off, instead of waiting for expiry.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+
+
+class BetaRequest(Base):
+    """Someone asking for access from the landing page."""
+
+    __tablename__ = "beta_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(250), index=True)
+    name: Mapped[str] = mapped_column(String(160), default="")
+    note: Mapped[str] = mapped_column(String(1000), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    handled: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .api import (
+    routes_auth,
     routes_config,
     routes_draft,
     routes_league,
@@ -44,6 +45,20 @@ async def lifespan(app: FastAPI):
     )
     init_db()
     settings = get_settings()
+
+    # Bootstrap the first account. There is no registration path, so without a
+    # configured owner nobody could ever sign in.
+    if settings.admin_username and settings.admin_password:
+        from .db import session_scope
+        from .services import auth as auth_service
+
+        with session_scope() as session:
+            created = auth_service.ensure_owner(
+                session, settings.admin_username, settings.admin_password
+            )
+            if created is not None and created.username == settings.admin_username.strip().lower():
+                log.info("Owner account available: %s", created.username)
+
     log.info(
         "Fantasy War Room ready (season=%s, demo=%s, espn_league=%s)",
         settings.espn_season,
@@ -71,6 +86,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+#: Reachable without signing in. Everything else under /api requires a session.
+#: Health is here so uptime checks and the update script keep working; the
+#: auth endpoints obviously must be, or nobody could sign in.
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/auth/me",
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/auth/beta-request",
+}
+
+
+@app.middleware("http")
+async def require_sign_in(request, call_next):
+    """Gate the API in the application rather than at the web server.
+
+    The web server's password prompt covered every path including the landing
+    page, which made a public front page impossible and could not be styled or
+    explained. Moving the check here lets the landing page be public while the
+    data behind it is not -- and means the app is still protected if the proxy
+    is ever reconfigured.
+    """
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        from .services import auth as auth_service
+        from .db import session_scope
+
+        token = request.cookies.get(auth_service.SESSION_COOKIE)
+        with session_scope() as session:
+            user = auth_service.user_for_token(session, token)
+        if user is None:
+            return JSONResponse(
+                status_code=401, content={"detail": "Sign in to continue."}
+            )
+    return await call_next(request)
+
+
+app.include_router(routes_auth.router)
 app.include_router(routes_config.router)
 app.include_router(routes_system.router)
 app.include_router(routes_league.router)

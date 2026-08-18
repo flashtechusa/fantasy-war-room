@@ -66,16 +66,46 @@ def engine(session, imported_league):
 
 
 @pytest.fixture
-def client(tmp_path):
-    """FastAPI TestClient with the database initialised."""
+def _client(tmp_path):
+    """Raw TestClient with the database initialised. Use `client` instead."""
     from fastapi.testclient import TestClient
 
     from app.db import init_db
     from app.main import app
 
     init_db()
-    with TestClient(app) as test_client:
+    # https, because the session cookie is Secure -- over http the client would
+    # never send it back and every signed-in test would look signed out.
+    with TestClient(app, base_url="https://testserver") as test_client:
         yield test_client
+
+
+TEST_USER = {"username": "tester", "password": "test-password-123"}
+
+
+@pytest.fixture
+def anon_client(_client):
+    """A signed-out browser. For testing what the public can reach."""
+    return _client
+
+
+@pytest.fixture
+def client(_client):
+    """A signed-in browser -- what almost every test needs.
+
+    The API requires a session, so tests that exercise league data have to be
+    authenticated. Signing in here keeps that detail out of every test file.
+    """
+    from app.db import session_scope
+    from app.services import auth as auth_service
+
+    with session_scope() as session:
+        auth_service.ensure_owner(session, TEST_USER["username"], TEST_USER["password"])
+        session.commit()
+
+    response = _client.post("/api/auth/login", json=TEST_USER)
+    assert response.status_code == 200, response.text
+    return _client
 
 
 @pytest.fixture

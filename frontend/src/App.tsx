@@ -10,6 +10,7 @@ import Week from './pages/Week'
 import Waivers from './pages/Waivers'
 import Trade from './pages/Trade'
 import PowerRankings from './pages/PowerRankings'
+import Landing from './pages/Landing'
 
 // In-season nav. The draft tools (board, live draft, simulator) stay routable
 // and are linked from League -- they matter one day a year, these matter every
@@ -24,7 +25,32 @@ const NAV = [
 ]
 
 export default function App() {
+  const auth = useAsync(() => api.me(), [])
   const health = useAsync(() => api.health(), [])
+
+  // Nothing is rendered until we know who is asking. Flashing the app and then
+  // replacing it with a landing page reads as a bug, and briefly shows the
+  // shape of someone's team to a signed-out browser.
+  if (auth.loading) return null
+
+  if (!auth.data?.authenticated) {
+    return (
+      <Landing
+        onSignedIn={() => {
+          auth.reload()
+          health.reload()
+        }}
+      />
+    )
+  }
+
+  async function signOut() {
+    try {
+      await api.logout()
+    } finally {
+      auth.reload()
+    }
+  }
 
   return (
     <div className="app">
@@ -38,6 +64,14 @@ export default function App() {
             {health.data?.league?.source === 'demo' && ' · DEMO DATA'}
           </div>
         </div>
+        <button
+          className="btn sm"
+          onClick={signOut}
+          style={{ flexShrink: 0 }}
+          aria-label="Sign out"
+        >
+          Sign out
+        </button>
       </header>
 
       <nav className="app-nav" aria-label="Primary">

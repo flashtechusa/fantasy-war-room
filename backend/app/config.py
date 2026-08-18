@@ -46,6 +46,19 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FWR_ESPN_S2", "ESPN_S2", "ESPN_COOKIE_S2"),
     )
 
+    # --- Accounts ---------------------------------------------------------
+    #: Bootstraps the first account. There is no registration path, so without
+    #: this there would be no way in. Only used when no user exists yet, so
+    #: changing it later cannot silently reset a password.
+    admin_username: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_ADMIN_USERNAME", "ADMIN_USERNAME"),
+    )
+    admin_password: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("FWR_ADMIN_PASSWORD", "ADMIN_PASSWORD"),
+    )
+
     # --- Additional projection sources ------------------------------------
     #: Bring your own key. Nothing is bundled, and the FantasyPros source stays
     #: inert until this is set. Free keys are issued for personal,
