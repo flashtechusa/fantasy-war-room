@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .api import (
+    routes_admin,
     routes_auth,
     routes_config,
     routes_draft,
@@ -124,6 +125,7 @@ async def require_sign_in(request, call_next):
 
 
 app.include_router(routes_auth.router)
+app.include_router(routes_admin.router)
 app.include_router(routes_config.router)
 app.include_router(routes_system.router)
 app.include_router(routes_league.router)

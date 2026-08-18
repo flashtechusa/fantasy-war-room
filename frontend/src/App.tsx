@@ -11,6 +11,7 @@ import Waivers from './pages/Waivers'
 import Trade from './pages/Trade'
 import PowerRankings from './pages/PowerRankings'
 import Landing from './pages/Landing'
+import Access from './pages/Access'
 
 // In-season nav. The draft tools (board, live draft, simulator) stay routable
 // and are linked from League -- they matter one day a year, these matter every
@@ -95,6 +96,7 @@ export default function App() {
           <Route path="/board" element={<DraftBoard />} />
           <Route path="/team" element={<MyTeam />} />
           <Route path="/teams" element={<PowerRankings />} />
+          <Route path="/access" element={<Access />} />
           <Route path="/simulate" element={<Simulator />} />
           <Route path="/settings" element={<LeagueSettings onChange={health.reload} />} />
           <Route path="*" element={<Navigate to="/week" replace />} />

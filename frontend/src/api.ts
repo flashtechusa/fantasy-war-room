@@ -477,6 +477,25 @@ export interface SeasonRoster {
   teams: { espn_team_id: number; name: string; is_mine: boolean }[]
 }
 
+export interface BetaRequestRow {
+  id: number
+  email: string
+  name: string
+  note: string
+  handled: boolean
+  created_at: string
+}
+
+export interface AccountRow {
+  id: number
+  username: string
+  display_name: string
+  role: string
+  enabled: boolean
+  created_at: string
+  last_login_at: string | null
+}
+
 export interface AuthState {
   authenticated: boolean
   user: { username: string; display_name: string; role: string } | null
@@ -644,6 +663,34 @@ export const api = {
       { method: 'POST' },
     ),
   me: () => request<AuthState>('/api/auth/me'),
+
+  betaRequests: () => request<{ requests: BetaRequestRow[] }>('/api/auth/beta-requests'),
+
+  markBetaRequest: (id: number, handled: boolean) =>
+    request<{ id: number; handled: boolean }>(
+      `/api/admin/beta-requests/${id}?handled=${handled}`,
+      { method: 'PATCH' },
+    ),
+
+  users: () => request<{ users: AccountRow[] }>('/api/admin/users'),
+
+  createUser: (body: { username: string; display_name?: string; role?: string }) =>
+    request<{ user: AccountRow; password: string }>('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateUser: (id: number, body: { enabled?: boolean; role?: string }) =>
+    request<{ user: AccountRow }>(`/api/admin/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  resetPassword: (id: number) =>
+    request<{ user: AccountRow; password: string }>(
+      `/api/admin/users/${id}/reset-password`,
+      { method: 'POST' },
+    ),
 
   login: (username: string, password: string) =>
     request<AuthState>('/api/auth/login', {
