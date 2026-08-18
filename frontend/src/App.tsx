@@ -11,7 +11,7 @@ import Waivers from './pages/Waivers'
 import Trade from './pages/Trade'
 import PowerRankings from './pages/PowerRankings'
 import Landing from './pages/Landing'
-import Access from './pages/Access'
+import AdminConsole from './pages/AdminConsole'
 
 // In-season nav. The draft tools (board, live draft, simulator) stay routable
 // and are linked from League -- they matter one day a year, these matter every
@@ -28,6 +28,13 @@ const NAV = [
 export default function App() {
   const auth = useAsync(() => api.me(), [])
   const health = useAsync(() => api.health(), [])
+
+  // The admin console is its own entrance, before the app's auth gate: signing
+  // out of a team must not sign you out of administration, and reaching /admin
+  // must not bounce you to the marketing page.
+  if (window.location.pathname.startsWith('/admin')) {
+    return <AdminConsole />
+  }
 
   // Nothing is rendered until we know who is asking. Flashing the app and then
   // replacing it with a landing page reads as a bug, and briefly shows the
@@ -105,7 +112,6 @@ export default function App() {
           <Route path="/board" element={<DraftBoard />} />
           <Route path="/team" element={<MyTeam />} />
           <Route path="/teams" element={<PowerRankings />} />
-          <Route path="/access" element={<Access />} />
           <Route path="/simulate" element={<Simulator />} />
           <Route
             path="/settings"
