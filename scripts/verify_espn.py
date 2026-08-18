@@ -171,8 +171,66 @@ def main() -> int:
     for season, picks in client.previous_draft_results().items():
         print(f"  {season}: {len(picks)} picks")
 
+    check_draft_sources(client, settings)
+    check_discovery(settings)
+
     print("\n✓ Verification complete. Start the app and import from the League tab.")
     return 0
+
+
+def check_draft_sources(client: EspnClient, settings) -> None:
+    """Compare both live-draft paths against each other, on this league.
+
+    This is the check worth running the week of a draft: it says which source
+    would answer, how fast, and whether they agree. See
+    docs/espn-api-comparison.md for why they can disagree.
+    """
+    rule("Live draft sources")
+    print(f"  Configured source: {settings.espn_draft_source}")
+    try:
+        snapshot = client.draft_snapshot()
+    except EspnConnectionError as exc:
+        print(f"  ✗ mDraftDetail  : {exc}")
+        return
+
+    state = (
+        "in progress" if snapshot.in_progress
+        else "complete" if snapshot.drafted
+        else "not started"
+    )
+    print(f"  mDraftDetail     : {snapshot.pick_count} picks, {state}, "
+          f"{snapshot.latency_ms:.0f} ms")
+    print(f"  espn-api         : {len(client.draft_results())} picks")
+    if snapshot.in_progress and snapshot.pick_count:
+        print("  → A draft is running. The direct read is the source that sees it.")
+
+
+def check_discovery(settings) -> None:
+    """Confirm ESPN will list this account's leagues.
+
+    Only possible with cookies -- discovery is an account-level lookup, and a
+    public league has no account behind it.
+    """
+    rule("League discovery")
+    if not settings.has_espn_credentials:
+        print("  Skipped: needs SWID and espn_s2 (public leagues have no account).")
+        return
+
+    from app.espn.discovery import discover_leagues
+    from app.espn.http import EspnHttpClient
+
+    with EspnHttpClient(swid=settings.espn_swid, espn_s2=settings.espn_s2) as http:
+        leagues, warnings = discover_leagues(http, season=settings.espn_season)
+
+    print(f"  Found {len(leagues)} league(s) for {settings.espn_season}:")
+    for league in leagues:
+        mine = league.my_team_name or "team not detected"
+        print(f"    {league.league_id:>10}  {league.name[:34]:<36}"
+              f"{league.team_count:>3} teams  ({mine})")
+    for warning in warnings:
+        print(f"  ⚠ {warning}")
+    if leagues:
+        print("  → Connect ESPN in the app will offer exactly these.")
 
 
 if __name__ == "__main__":

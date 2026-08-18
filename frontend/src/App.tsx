@@ -10,6 +10,8 @@ import Week from './pages/Week'
 import Waivers from './pages/Waivers'
 import Trade from './pages/Trade'
 import PowerRankings from './pages/PowerRankings'
+import ConnectEspn from './pages/ConnectEspn'
+import DraftDiagnostics from './pages/DraftDiagnostics'
 import Landing from './pages/Landing'
 import Access from './pages/Access'
 
@@ -76,7 +78,12 @@ export default function App() {
       </header>
 
       <nav className="app-nav" aria-label="Primary">
-        {NAV.map((item) => (
+        {/* The diagnostics screen is only reachable when it is switched on,
+            and a route with no link is a route nobody finds. */}
+        {(health.data?.debug_screens
+          ? [...NAV, { to: '/diagnostics', label: 'Sync', icon: '📡' }]
+          : NAV
+        ).map((item) => (
           <NavLink key={item.to} to={item.to} className={({ isActive }) => (isActive ? 'active' : '')}>
             <span className="icon" aria-hidden="true">
               {item.icon}
@@ -97,6 +104,12 @@ export default function App() {
           <Route path="/team" element={<MyTeam />} />
           <Route path="/teams" element={<PowerRankings />} />
           <Route path="/access" element={<Access />} />
+          <Route path="/connect" element={<ConnectEspn onChange={health.reload} />} />
+          {/* Debug screen. Routable only while FWR_DEBUG_SCREENS is on -- it is
+              a testing tool, and one more thing to explain otherwise. */}
+          {health.data?.debug_screens && (
+            <Route path="/diagnostics" element={<DraftDiagnostics />} />
+          )}
           <Route path="/simulate" element={<Simulator />} />
           <Route
             path="/settings"

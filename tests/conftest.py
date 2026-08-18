@@ -30,15 +30,27 @@ def _isolated_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.delenv(name, raising=False)
 
     from app import config, db
+    from app.api import routes_draft, routes_espn
     from app.services import board
+    from app.services.draft_diag import diagnostics
 
-    config.reset_settings_cache()
-    db.reset_engine()
-    board.clear_cache()
+    def reset_process_state() -> None:
+        """Clear the caches that outlive a request.
+
+        Draft ids restart at 1 in every test database, so anything keyed on one
+        -- the poll-interval gate, recorded sync attempts -- would otherwise
+        leak across tests and make them order-dependent.
+        """
+        config.reset_settings_cache()
+        db.reset_engine()
+        board.clear_cache()
+        diagnostics.clear()
+        routes_draft._last_sync.clear()
+        routes_espn.reset_throttle()
+
+    reset_process_state()
     yield
-    config.reset_settings_cache()
-    db.reset_engine()
-    board.clear_cache()
+    reset_process_state()
 
 
 @pytest.fixture

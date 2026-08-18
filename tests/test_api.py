@@ -23,10 +23,13 @@ class TestHealth:
         text = str(body).lower()
         assert "swid" not in text
         assert "espn_s2" not in text
+        # Pinned deliberately: a new key here has to be a conscious decision,
+        # because this block is one `settings.espn_swid` away from a leak.
         assert set(body["espn"]) == {
             "league_id_configured",
             "private_credentials_configured",
             "reachable_config",
+            "draft_source",
         }
 
     def test_espn_probe_reports_demo_mode(self, client):

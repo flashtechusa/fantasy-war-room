@@ -778,3 +778,169 @@ th.num {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* --- Connect ESPN ------------------------------------------------------- */
+
+.connect-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.connect-steps li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.connect-steps li.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--line);
+  font-size: 11px;
+}
+
+.connect-steps li.active .step-number {
+  background: var(--accent);
+  color: #fff;
+}
+
+.connect-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.connect-panel.inset {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.connect-panel h4,
+.rules-block h4 {
+  margin: 6px 0 2px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.league-options {
+  display: grid;
+  gap: 8px;
+}
+
+.league-option {
+  text-align: left;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.league-option:hover {
+  border-color: var(--accent);
+}
+
+.league-option.selected {
+  border-color: var(--accent);
+  background: rgba(214, 59, 38, 0.08);
+}
+
+.league-option-name {
+  font-weight: 600;
+}
+
+.rules-review {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.rules-block {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.pairing-code code {
+  font-size: 20px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+}
+
+/* --- Draft sync diagnostics --------------------------------------------- */
+
+.diag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.diag-stat {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.diag-value {
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.diag-value.ok {
+  color: var(--good, #3fb950);
+}
+
+.diag-value.warn {
+  color: var(--warn, #d29922);
+}
+
+.diag-value.bad {
+  color: var(--bad, #f85149);
+}
+
+.diag-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.diag-table th,
+.diag-table td {
+  text-align: left;
+  padding: 4px 8px 4px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}

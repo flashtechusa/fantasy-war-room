@@ -18,6 +18,7 @@ from .api import (
     routes_auth,
     routes_config,
     routes_draft,
+    routes_espn,
     routes_league,
     routes_players,
     routes_season,
@@ -29,6 +30,7 @@ from .api.deps import settings_dep
 from .config import Settings, get_settings
 from .db import get_db, init_db
 from .espn.client import EspnConnectionError
+from .espn.redaction import install_log_redaction
 from .models import League, Player
 from .services.importer import get_active_league
 from .services.provider import build_espn_client
@@ -44,6 +46,10 @@ async def lifespan(app: FastAPI):
         level=get_settings().log_level.upper(),
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
     )
+    # Installed before anything can log: ESPN cookies are session credentials,
+    # and the realistic way one escapes is an exception message carrying a
+    # request URL, not a deliberate print.
+    install_log_redaction()
     init_db()
     settings = get_settings()
 
@@ -96,6 +102,11 @@ PUBLIC_API_PATHS = {
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/beta-request",
+    # The browser extension runs on espn.com and holds no session cookie for
+    # this app. It authenticates with a single-use pairing code instead, which
+    # the endpoint itself verifies -- see routes_espn.connect_from_extension.
+    "/api/espn/extension/connect",
+    "/api/espn/extension/manifest-contract",
 }
 
 
@@ -127,6 +138,7 @@ async def require_sign_in(request, call_next):
 app.include_router(routes_auth.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_config.router)
+app.include_router(routes_espn.router)
 app.include_router(routes_system.router)
 app.include_router(routes_league.router)
 app.include_router(routes_players.router)
@@ -160,7 +172,9 @@ def health(
             "league_id_configured": settings.espn_league_id is not None,
             "private_credentials_configured": settings.has_espn_credentials,
             "reachable_config": settings.can_reach_espn,
+            "draft_source": settings.espn_draft_source,
         },
+        "debug_screens": settings.debug_screens,
         "league_imported": league is not None,
         "league": (
             {

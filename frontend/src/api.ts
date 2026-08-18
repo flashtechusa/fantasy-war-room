@@ -274,7 +274,9 @@ export interface HealthInfo {
     league_id_configured: boolean
     private_credentials_configured: boolean
     reachable_config: boolean
+    draft_source: string
   }
+  debug_screens: boolean
   league_imported: boolean
   league: { name: string; season: number; source: string; team_count: number } | null
   players_loaded: number
@@ -567,7 +569,188 @@ export interface ConfigSaveResult {
   connection: { connected: boolean; league_name?: string; detail?: string } | null
 }
 
+
+// --- Connect ESPN ---------------------------------------------------------
+
+export interface EspnConnectionStatus {
+  connected: boolean
+  credentials_stored: boolean
+  swid_set: boolean
+  espn_s2_set: boolean
+  espn_league_id: number | null
+  espn_season: number | null
+  my_team_id: number | null
+  updated_at?: string | null
+  can_discover: boolean
+  manual_entry_available?: boolean
+}
+
+export interface DiscoveredTeam {
+  espn_team_id: number
+  name: string
+  abbrev: string
+  owners: string[]
+  logo_url: string
+  draft_slot: number | null
+  is_mine: boolean
+}
+
+export interface DiscoveredLeague {
+  league_id: number
+  season: number
+  name: string
+  team_count: number
+  my_team_id: number | null
+  my_team_name: string
+  scoring_type: string
+  is_ppr: boolean
+  ppr_value: number
+  draft_type: string
+  draft_completed: boolean
+  draft_in_progress: boolean
+  draft_pick_count: number
+  teams: DiscoveredTeam[]
+  latency_ms: number
+}
+
+export interface LeagueDiscovery {
+  season: number
+  count: number
+  leagues: DiscoveredLeague[]
+  warnings: string[]
+}
+
+export interface LeagueRules {
+  roster_slots: Record<string, number>
+  bench_slots: number
+  ir_slots: number
+  scoring_type: string
+  is_ppr: boolean
+  ppr_value: number
+  scoring_rule_count: number
+  scoring_rules: { stat_id: number; abbrev: string; label: string; points: number }[]
+  draft_type: string
+  draft_order: number[]
+  draft_date: number | null
+  keeper_count: number
+  waiver_type: string
+  uses_faab: boolean
+  acquisition_budget: number
+  waiver_process_days: string[]
+  waiver_hours: number | null
+  regular_season_weeks: number
+  playoff_team_count: number
+  playoff_matchup_length: number
+  playoff_seed_tie_rule: string
+}
+
+export interface LeaguePreview {
+  league: DiscoveredLeague
+  rules: LeagueRules
+}
+
+export interface PairingCode {
+  code: string
+  expires_at: string
+  expires_in_seconds: number
+}
+
+export interface DraftDiagnostics {
+  draft_session_id: number
+  polling: {
+    enabled: boolean
+    interval_seconds: number
+    attempts_recorded: number
+    history_limit: number
+    seconds_until_next_allowed?: number
+  }
+  endpoint: {
+    url: string
+    source: string
+    candidates: { source: string; description: string; role: string }[]
+  }
+  picks: {
+    espn_latest_pick: number
+    local_latest_pick: number
+    espn_pick_count: number
+    local_pick_count: number
+    new_picks_last_sync: number
+    new_picks_detected: boolean
+    behind_by: number
+    espn_draft_complete: boolean
+    espn_draft_in_progress: boolean
+    library_pick_count: number
+    direct_pick_count: number
+  }
+  response: {
+    last_success_at: string | null
+    seconds_since_last_success: number | null
+    last_latency_ms: number
+    average_latency_ms: number
+    max_latency_ms: number
+    success_rate: number | null
+  }
+  last_error: { at: string; detail: string } | null
+  recent: Record<string, unknown>[]
+  config: Record<string, unknown>
+  local: Record<string, unknown>
+}
+
 export const api = {
+  // --- Connect ESPN -------------------------------------------------------
+  // Cookies travel one way only: submitted here, never read back. Nothing on
+  // this client can display a credential because nothing returns one.
+  espnStatus: () => request<EspnConnectionStatus>('/api/espn/status'),
+
+  submitEspnCredentials: (body: { swid: string; espn_s2: string; season?: number }) =>
+    request<{ stored: boolean; status: EspnConnectionStatus }>('/api/espn/credentials', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  discoverEspnLeagues: (season?: number, leagueId?: number) => {
+    const query = new URLSearchParams()
+    if (season) query.set('season', String(season))
+    if (leagueId) query.set('league_id', String(leagueId))
+    const suffix = query.toString()
+    return request<LeagueDiscovery>(`/api/espn/leagues${suffix ? `?${suffix}` : ''}`)
+  },
+
+  previewEspnLeague: (leagueId: number, season: number) =>
+    request<LeaguePreview>(`/api/espn/leagues/${leagueId}?season=${season}`),
+
+  selectEspnLeague: (body: { league_id: number; season: number; team_id?: number | null }) =>
+    request<{
+      selected: boolean
+      league: DiscoveredLeague
+      rules: LeagueRules
+      my_team_id: number | null
+      team_auto_detected: boolean
+    }>('/api/espn/select', { method: 'POST', body: JSON.stringify(body) }),
+
+  importEspnLeague: () =>
+    request<{ imported: boolean; players_imported: number; league: LeagueInfo }>(
+      '/api/espn/import',
+      { method: 'POST' },
+    ),
+
+  disconnectEspn: () =>
+    request<{
+      disconnected: boolean
+      credentials_deleted: boolean
+      league_cleared: boolean
+      pairing_codes_revoked: number
+      status: EspnConnectionStatus
+    }>('/api/espn', { method: 'DELETE' }),
+
+  createPairingCode: () =>
+    request<PairingCode>('/api/espn/pairing-code', { method: 'POST' }),
+
+  draftDiagnostics: () => request<DraftDiagnostics>('/api/draft/diagnostics'),
+
+  clearDraftDiagnostics: () =>
+    request<{ cleared: boolean }>('/api/draft/diagnostics', { method: 'DELETE' }),
+
   health: () => request<HealthInfo>('/api/health'),
 
   config: () => request<ConfigInfo>('/api/config'),

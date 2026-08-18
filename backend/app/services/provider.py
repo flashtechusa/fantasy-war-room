@@ -12,6 +12,7 @@ from typing import Protocol
 from ..config import Settings, get_settings
 from ..espn import demo
 from ..espn.client import EspnClient, EspnConnectionError, PlayerRecord
+from ..espn.http import EspnHttpClient
 
 
 class DataProvider(Protocol):
@@ -130,6 +131,7 @@ def build_provider(settings: Settings | None = None) -> DataProvider:
             season=settings.espn_season,
             swid=settings.espn_swid,
             espn_s2=settings.espn_s2,
+            draft_source=settings.espn_draft_source,
         )
     )
 
@@ -146,4 +148,15 @@ def build_espn_client(settings: Settings | None = None) -> EspnClient:
         season=settings.espn_season,
         swid=settings.espn_swid,
         espn_s2=settings.espn_s2,
+        draft_source=settings.espn_draft_source,
     )
+
+
+def build_http_client(settings: Settings | None = None) -> EspnHttpClient:
+    """A direct ESPN handle for discovery, which happens before a league exists.
+
+    Unlike `build_espn_client` this needs no league id -- finding the league is
+    the whole point.
+    """
+    settings = settings or get_settings()
+    return EspnHttpClient(swid=settings.espn_swid, espn_s2=settings.espn_s2)

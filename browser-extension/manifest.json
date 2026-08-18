@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Fantasy War Room ESPN Connector",
+  "version": "0.1.0",
+  "description": "Connects your ESPN fantasy football account to Fantasy War Room. Reads only ESPN's two session cookies, only when you click Connect.",
+  "minimum_chrome_version": "102",
+  "permissions": ["cookies", "activeTab", "storage"],
+  "host_permissions": ["https://fantasy.espn.com/*"],
+  "optional_host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_title": "Connect ESPN to Fantasy War Room",
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "128": "icon128.png"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}

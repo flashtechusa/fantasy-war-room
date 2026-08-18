@@ -137,7 +137,36 @@ the app, **not** to advise a real draft.
 
 ## 2. ESPN credentials
 
-All ESPN configuration lives in environment variables. Nothing is ever hard-coded.
+### The short way: Connect ESPN
+
+Open **League → Connect ESPN**. Hand over the two ESPN cookies once and the app
+does the rest:
+
+1. discovers every fantasy football league your ESPN account can reach —
+   *"Found 3 ESPN leagues"* — so you never type a league id;
+2. works out which team is yours from the cookie itself;
+3. shows you the scoring, roster, waiver, playoff and draft rules it read, to
+   confirm before anything is imported;
+4. imports.
+
+Credentials are encrypted before storage, never logged, never returned by any
+endpoint, and deletable with **Disconnect ESPN**. Each account holds its own, so
+two people on one install never see each other's league.
+
+There is also a Manifest V3 [browser extension](browser-extension/README.md)
+that collects the cookies for you: `espn_s2` is `HttpOnly`, so an extension is
+the only thing in a browser permitted to read it — no bookmarklet can, and ours
+says so rather than pretending. Full detail, including what these cookies can
+do and how to revoke them: [docs/espn-connection.md](docs/espn-connection.md).
+
+Manual entry stays available on the League screen and always will — it needs
+nothing but a league id, so it is the path that still works if ESPN's account
+endpoint changes.
+
+### The environment-variable way
+
+All ESPN configuration can also live in environment variables. Nothing is ever
+hard-coded.
 
 | Variable | Required | Description |
 | --- | --- | --- |
@@ -145,6 +174,9 @@ All ESPN configuration lives in environment variables. Nothing is ever hard-code
 | `FWR_ESPN_SEASON` | yes | e.g. `2026` |
 | `FWR_ESPN_SWID` | private leagues only | The `SWID` cookie, braces included |
 | `FWR_ESPN_S2` | private leagues only | The `espn_s2` cookie |
+| `FWR_SECRET_KEY` | recommended | Encrypts per-account credentials. Generated beside the database if unset — back it up |
+| `FWR_ESPN_DRAFT_SOURCE` | no | `auto` (default), `espn_api`, or `direct` — which path supplies live draft picks |
+| `FWR_DEBUG_SCREENS` | no | Shows the ESPN Draft Sync Diagnostics screen |
 
 The bare names are accepted too — `ESPN_LEAGUE_ID`, `ESPN_YEAR` / `ESPN_SEASON`,
 `ESPN_SWID` / `SWID`, `ESPN_S2` — so credentials copied from anywhere else can be
@@ -319,6 +351,21 @@ changing an endpoint mid-draft. **Undo last** reverses a mistake.
 adds picks you haven't recorded. It never overwrites a manual entry, and the
 backend rate-limits polling to one request per `FWR_DRAFT_POLL_INTERVAL` seconds
 (default 10) regardless of how often the UI asks.
+
+Two ESPN paths are consulted and whichever reports more picks wins. This matters:
+the `espn-api` library suppresses picks until ESPN flags the draft as *complete*,
+so on its own it reports nothing for the entire duration of a live draft. A
+direct `view=mDraftDetail` read does not, and it also gives us ESPN's own
+`overallPickNumber` rather than one derived from round arithmetic — which is
+wrong whenever picks have been traded, and meaningless in an auction. The
+evidence and the decision are in
+[docs/espn-api-comparison.md](docs/espn-api-comparison.md).
+
+**ESPN Draft Sync Diagnostics.** Set `FWR_DEBUG_SCREENS=true` and `/diagnostics`
+shows which endpoint answered, ESPN's latest pick number against ours, response
+latency, whether new picks were detected, and the last error. It is built from
+counts and timings only — no cookies, no headers, no ESPN payloads — so it is
+safe to leave open on a screen at a draft.
 
 **Top picks right now.** The next nine players, each expandable into *why take him
 now*, *why wait*, and *principal risk*.
@@ -581,6 +628,10 @@ backend/app/
   models.py            SQLAlchemy schema
   espn/
     client.py          defensive wrapper over cwendt94/espn-api
+    http.py            direct v3 client: discovery + live draft, timed and redacted
+    discovery.py       find a user's leagues; detect which team is theirs
+    draft_feed.py      parse view=mDraftDetail, including a draft in progress
+    redaction.py       keeps SWID / espn_s2 out of logs and error messages
     demo.py            synthetic league + player pool
     constants.py       ESPN id/label mappings and normalisation
   engine/
@@ -595,16 +646,21 @@ backend/app/
     simulate.py        Monte Carlo mock drafts
   services/            provider selection, import, board caching, draft state
   api/                 FastAPI routers and serializers
+browser-extension/     Manifest V3 ESPN cookie connector (proof of concept)
 frontend/src/
-  pages/               LeagueSettings, DraftBoard, LiveDraft, MyTeam, Simulator
+  pages/               ConnectEspn, LeagueSettings, DraftBoard, LiveDraft, MyTeam, Simulator
   components.tsx       player cards, score bars, bottom sheet
   styles.css           mobile-first design system
-tests/                 283 tests, no network or credentials required
+tests/                 702 tests, no network or credentials required
 ```
 
 ### Credits
 
 Built on [cwendt94/espn-api](https://github.com/cwendt94/espn-api) for ESPN access.
+ESPN's request conventions and draft payload were cross-checked against
+[mkreiser/ESPN-Fantasy-Football-API](https://github.com/mkreiser/ESPN-Fantasy-Football-API)
+(LGPL-3.0) — studied, not copied; see
+[docs/espn-api-comparison.md](docs/espn-api-comparison.md).
 Architecture ideas from [KBThree13/mcp_espn_ff](https://github.com/KBThree13/mcp_espn_ff);
 valuation concepts informed by [jjti/ff](https://github.com/jjti/ff) (VOR as the
 ranking backbone) and [elliott-imhoff/optimal-adp](https://github.com/elliott-imhoff/optimal-adp)

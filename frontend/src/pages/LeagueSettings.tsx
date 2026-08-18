@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
@@ -89,10 +90,19 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
             <span className="muted">No league configured yet.</span>
           )}
         </div>
-        <button className="btn sm" onClick={() => setOpen((v) => !v)}>
-          {open ? 'Cancel' : configured ? 'Change' : 'Set up'}
-        </button>
+        <div className="row">
+          <Link className="btn primary sm" to="/connect">
+            {configured ? 'Reconnect ESPN' : 'Connect ESPN'}
+          </Link>
+          <button className="btn sm" onClick={() => setOpen((v) => !v)}>
+            {open ? 'Cancel' : 'Enter manually'}
+          </button>
+        </div>
       </div>
+
+      {/* Manual entry stays, deliberately. The guided flow needs ESPN's account
+          endpoint to answer; this one needs nothing but a league id, so it is
+          the path that still works when that assumption fails. */}
 
       {open && (
         <>
@@ -145,7 +155,9 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
           <div className="tiny faint" style={{ marginTop: 8 }}>
             Your cookies are encrypted before they are stored and are never sent back to
             the browser. This connection is yours alone — nobody else with an account can
-            see it. Public leagues need only the league id.
+            see it. Public leagues need only the league id. Prefer{' '}
+            <Link to="/connect">Connect ESPN</Link> — it finds your leagues and your team
+            for you.
           </div>
         </>
       )}

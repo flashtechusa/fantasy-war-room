@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Connect ESPN</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Fantasy War Room</h1>
+      <p class="sub">Connect your ESPN account</p>
+    </header>
+
+    <main>
+      <section class="step">
+        <label for="server">Your Fantasy War Room address</label>
+        <input
+          id="server"
+          type="url"
+          inputmode="url"
+          placeholder="http://localhost:8000"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p class="hint">
+          Where your copy of Fantasy War Room is running. Credentials are sent
+          straight there and nowhere else.
+        </p>
+      </section>
+
+      <section class="step">
+        <label for="code">Pairing code</label>
+        <input
+          id="code"
+          type="text"
+          maxlength="12"
+          placeholder="ABCD2345"
+          autocomplete="off"
+          spellcheck="false"
+          autocapitalize="characters"
+        />
+        <p class="hint">
+          Generate one in Fantasy War Room under <strong>Connect ESPN</strong>.
+          It works once and expires in five minutes.
+        </p>
+      </section>
+
+      <section class="step">
+        <h2>What this will send</h2>
+        <ul id="detected" class="detected">
+          <li data-key="swid">ESPN session cookie (SWID) — <span>checking…</span></li>
+          <li data-key="espn_s2">ESPN session cookie (espn_s2) — <span>checking…</span></li>
+          <li data-key="league">League on this page — <span>checking…</span></li>
+        </ul>
+        <p class="hint">
+          The cookie values are never shown here, never stored by this
+          extension, and never written to the console.
+        </p>
+      </section>
+
+      <button id="connect" type="button" disabled>Connect this ESPN account</button>
+      <p id="status" class="status" role="status" aria-live="polite"></p>
+    </main>
+
+    <footer>
+      <p class="tiny">
+        This extension runs only on <code>fantasy.espn.com</code>. Disconnect at
+        any time from Fantasy War Room, or sign out of ESPN to invalidate the
+        cookies entirely.
+      </p>
+    </footer>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

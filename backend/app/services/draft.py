@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..config import Settings, get_settings
 from ..engine.draft_math import round_of, pick_in_round, slot_for_pick
 from ..models import DraftPick, DraftSession, League, Player, utcnow
+from .draft_diag import SyncAttempt, diagnostics
 from .provider import build_espn_client
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,18 @@ def set_my_slot(session: Session, draft: DraftSession, slot: int) -> DraftSessio
     return draft
 
 
+def _local_player_names(session: Session, season: int) -> dict[int, str]:
+    """ESPN player id -> name, from our own import.
+
+    The live-draft endpoint carries ids only, which is exactly what keeps it
+    small enough to poll. Names come from the pool we already have.
+    """
+    return {
+        player.espn_player_id: player.name
+        for player in session.scalars(select(Player).where(Player.season == season)).all()
+    }
+
+
 def sync_from_espn(
     session: Session, draft: DraftSession, league: League, settings: Settings | None = None
 ) -> dict:
@@ -179,10 +192,44 @@ def sync_from_espn(
 
     Only *adds* picks we don't have; manual entries are never clobbered.  ESPN
     is polled at most once per `FWR_DRAFT_POLL_INTERVAL` seconds by the caller.
+
+    Every attempt is recorded for the draft diagnostics screen, including
+    failures -- during a draft, "ESPN stopped answering four minutes ago" is
+    the single most useful thing the app can tell you, and it is invisible if
+    only successes are kept.
     """
     settings = settings or get_settings()
-    client = build_espn_client(settings)
-    espn_picks = client.live_draft_picks()
+    local_before = len(draft.picks)
+    local_latest_before = max((p.overall_pick for p in draft.picks), default=0)
+
+    attempt = SyncAttempt(
+        local_pick_count=local_before,
+        local_latest_pick=local_latest_before,
+    )
+
+    try:
+        client = build_espn_client(settings)
+        espn_picks = client.live_draft_picks(
+            player_names=_local_player_names(session, league.season)
+        )
+    except Exception as exc:
+        attempt.ok = False
+        attempt.error = str(exc)
+        diagnostics.record(draft.id, attempt)
+        raise
+
+    attempt.ok = True
+    attempt.source = getattr(espn_picks, "source", "")
+    attempt.endpoint = getattr(espn_picks, "endpoint", "")
+    attempt.latency_ms = getattr(espn_picks, "latency_ms", 0.0)
+    attempt.espn_draft_complete = bool(getattr(espn_picks, "drafted", False))
+    attempt.espn_draft_in_progress = bool(getattr(espn_picks, "in_progress", False))
+    attempt.library_pick_count = getattr(espn_picks, "library_pick_count", 0)
+    attempt.direct_pick_count = getattr(espn_picks, "direct_pick_count", 0)
+    attempt.espn_pick_count = len(espn_picks)
+    attempt.espn_latest_pick = max(
+        (p.get("overall_pick") or 0 for p in espn_picks), default=0
+    )
 
     known_players = {pick.espn_player_id for pick in draft.picks}
     known_slots = {pick.overall_pick for pick in draft.picks}
@@ -215,9 +262,21 @@ def sync_from_espn(
     draft.last_synced_at = utcnow()
     session.commit()
 
+    attempt.new_picks = added
+    attempt.local_pick_count = len(draft.picks)
+    attempt.local_latest_pick = max((p.overall_pick for p in draft.picks), default=0)
+    if skipped:
+        attempt.error = "; ".join(skipped[:3])
+    elif getattr(espn_picks, "errors", None):
+        # One source failing while the other answered is not a sync failure,
+        # but it is exactly what the diagnostics screen exists to surface.
+        attempt.error = "; ".join(espn_picks.errors[:3])
+    diagnostics.record(draft.id, attempt)
+
     return {
         "added": added,
         "total_espn_picks": len(espn_picks),
+        "source": attempt.source,
         "skipped": skipped,
         "synced_at": draft.last_synced_at,
     }

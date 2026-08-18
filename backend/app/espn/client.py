@@ -36,6 +36,9 @@ from .constants import (
     normalise_slot_label,
     stat_label,
 )
+from .draft_feed import DraftFeedSnapshot, fetch_draft_snapshot
+from .http import EspnHttpClient, EspnHttpError
+from .redaction import redact
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +48,41 @@ REGULAR_SEASON_WEEKS = range(1, 19)
 
 class EspnConnectionError(RuntimeError):
     """Raised when we cannot talk to ESPN for this league."""
+
+
+@dataclass
+class LiveDraftResult:
+    """Picks plus the provenance the diagnostics screen reports.
+
+    Behaves like the list of picks it replaced, so existing callers that
+    iterate it, take its length or index into it keep working unchanged.
+    """
+
+    picks: list[dict] = field(default_factory=list)
+    #: `espn_api` or `espn_draft_detail`.
+    source: str = ""
+    #: Already redacted. Safe to display.
+    endpoint: str = ""
+    latency_ms: float = 0.0
+    drafted: bool = False
+    in_progress: bool = False
+    library_pick_count: int = 0
+    direct_pick_count: int = 0
+    #: Redacted messages from whichever source failed, if either did.
+    errors: list[str] = field(default_factory=list)
+
+    def __iter__(self):
+        return iter(self.picks)
+
+    def __len__(self) -> int:
+        return len(self.picks)
+
+    def __getitem__(self, index):
+        return self.picks[index]
+
+    @property
+    def latest_pick_number(self) -> int:
+        return max((p.get("overall_pick") or 0 for p in self.picks), default=0)
 
 
 @dataclass
@@ -105,14 +143,19 @@ class EspnClient:
         season: int,
         swid: str | None = None,
         espn_s2: str | None = None,
+        draft_source: str = "auto",
     ) -> None:
         self.league_id = league_id
         self.season = season
         self.swid = swid or None
         self.espn_s2 = espn_s2 or None
+        #: auto | espn_api | direct. `auto` consults both live-draft sources
+        #: and takes whichever reports more picks.
+        self.draft_source = draft_source or "auto"
         self._league: EspnLeague | None = None
         self._raw_settings: dict | None = None
         self._bye_weeks: dict[str, int] | None = None
+        self._http: EspnHttpClient | None = None
 
     # -- connection --------------------------------------------------------
 
@@ -655,13 +698,131 @@ class EspnClient:
 
     # -- Phase 5: live draft sync -----------------------------------------
 
-    def live_draft_picks(self) -> list[dict]:
-        """Re-poll ESPN's draft detail. Safe to call repeatedly during a draft.
+    def http(self) -> EspnHttpClient:
+        """A direct ESPN handle sharing this client's credentials.
 
-        Returns picks made so far; empty list before the draft starts.
+        Kept on the instance so a live draft reuses one connection pool across
+        polls instead of completing a TLS handshake every few seconds.
+        """
+        if self._http is None:
+            self._http = EspnHttpClient(swid=self.swid, espn_s2=self.espn_s2)
+        return self._http
+
+    def draft_snapshot(self, player_names: dict[int, str] | None = None) -> DraftFeedSnapshot:
+        """Read the draft board straight from `view=mDraftDetail`.
+
+        This is the *fallback* path for live drafts. See `espn.draft_feed` for
+        why the library path cannot serve one.
+        """
+        team_names: dict[int, str] = {}
+        team_count = 0
+        try:
+            league = self.connect()
+            team_count = len(league.teams)
+            team_names = {
+                t.team_id: getattr(t, "team_name", "") or "" for t in league.teams
+            }
+        except EspnConnectionError:
+            # The direct read does not need the library's league object; losing
+            # it only costs us team names.
+            pass
+
+        try:
+            return fetch_draft_snapshot(
+                self.http(),
+                league_id=self.league_id,
+                season=self.season,
+                team_count=team_count,
+                team_names=team_names,
+                player_names=player_names or {},
+            )
+        except EspnHttpError as exc:
+            raise EspnConnectionError(str(exc)) from exc
+
+    def live_draft_picks(self, player_names: dict[int, str] | None = None) -> LiveDraftResult:
+        """Picks made so far. Safe to call repeatedly during a draft.
+
+        Two sources are consulted, and the one with more picks wins:
+
+        * the `espn-api` library, our long-standing path, which is reliable
+          once a draft is *complete*;
+        * a direct `view=mDraftDetail` read, which also works while a draft is
+          *running* -- the library suppresses picks until ESPN flags the draft
+          as finished, so during the window that matters it reports nothing.
+
+        Taking the larger of the two means the new path can only ever add
+        picks. If ESPN changes the direct payload, the library path still
+        answers exactly as it did before.
+
+        The result is a `LiveDraftResult` rather than a bare list so the draft
+        diagnostics screen can show which source answered and how long it took.
+        The object iterates like the list it replaced.
+        """
+        mode = (self.draft_source or "auto").lower()
+        errors: list[str] = []
+
+        library_picks: list[dict] = []
+        library_answered = False
+        if mode in {"auto", "espn_api"}:
+            try:
+                library_picks = self._library_draft_picks()
+                library_answered = True
+            except EspnConnectionError as exc:
+                errors.append(f"espn-api: {redact(exc)}")
+                if mode == "espn_api":
+                    raise
+
+        snapshot: DraftFeedSnapshot | None = None
+        if mode in {"auto", "direct"}:
+            try:
+                snapshot = self.draft_snapshot(player_names=player_names)
+            except EspnConnectionError as exc:
+                errors.append(f"mDraftDetail: {redact(exc)}")
+                if mode == "direct":
+                    raise
+
+        direct_picks = snapshot.picks if snapshot else []
+
+        if snapshot is not None and len(direct_picks) >= len(library_picks):
+            source = "espn_draft_detail"
+            picks = direct_picks
+        else:
+            source = "espn_api"
+            picks = library_picks
+
+        # Only a total failure is an error. If either source answered -- even
+        # with an empty board, which is what a league reports before its draft
+        # -- that is the answer, and the other one's failure is recorded for
+        # the diagnostics screen rather than raised. Raising here would turn a
+        # pre-draft league into a 502 the moment the new endpoint had a bad
+        # day, which is exactly the regression adding a fallback must not
+        # introduce.
+        if not library_answered and snapshot is None:
+            raise EspnConnectionError("; ".join(errors) or "No ESPN draft source answered.")
+
+        return LiveDraftResult(
+            picks=picks,
+            source=source,
+            endpoint=snapshot.endpoint if snapshot else "espn-api league_get(view=mDraftDetail)",
+            latency_ms=snapshot.latency_ms if snapshot else 0.0,
+            drafted=snapshot.drafted if snapshot else bool(library_picks),
+            in_progress=snapshot.in_progress if snapshot else False,
+            library_pick_count=len(library_picks),
+            direct_pick_count=len(direct_picks),
+            errors=errors,
+        )
+
+    def _library_draft_picks(self) -> list[dict]:
+        """`espn-api`'s view of the draft, re-fetched.
+
+        `refresh_draft()` appends to the library's pick list without clearing
+        it, so polling would otherwise return each pick once per poll. The
+        list is reset here before refreshing, which keeps repeated calls
+        idempotent.
         """
         league = self.connect()
         try:
+            league.draft = []
             league.refresh_draft()
         except Exception as exc:
             raise EspnConnectionError(f"Could not refresh the ESPN draft: {exc}") from exc

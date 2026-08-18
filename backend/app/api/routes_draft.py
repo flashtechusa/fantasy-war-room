@@ -13,6 +13,7 @@ from ..db import get_db
 from ..espn.client import EspnConnectionError
 from ..models import DraftSession, League
 from ..services import draft as draft_service
+from ..services import draft_diag
 from .deps import BoardContext, board_dep, draft_session_dep, league_dep, settings_dep
 from .serializers import (
     serialize_board_meta,
@@ -151,6 +152,61 @@ def sync(
 
     _last_sync[draft.id] = now
     return {"synced": True, **result, "draft": serialize_draft_session(draft)}
+
+
+@router.get("/diagnostics")
+def diagnostics(
+    session: Session = Depends(get_db),
+    draft: DraftSession = Depends(draft_session_dep),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """ESPN Draft Sync Diagnostics.
+
+    Answers the one question nobody can answer from the outside: is ESPN
+    keeping up with the draft? Reports the endpoint being polled, how far ESPN
+    is ahead of us, how long its last responses took, and what failed.
+
+    Deliberately contains no cookies, no request headers and no ESPN payloads
+    -- only counts, timings and redacted error text. That is what makes it safe
+    to leave reachable during a live draft instead of behind a restart.
+    """
+    report = draft_diag.diagnostics.report(
+        draft.id,
+        poll_interval=settings.draft_poll_interval,
+        sync_enabled=bool(draft.espn_sync_enabled),
+    )
+    last = _last_sync.get(draft.id)
+    report["polling"]["seconds_until_next_allowed"] = (
+        max(0.0, round(settings.draft_poll_interval - (time.monotonic() - last), 1))
+        if last is not None
+        else 0.0
+    )
+    report["config"] = {
+        "draft_source": settings.espn_draft_source,
+        "league_configured": settings.espn_league_id is not None,
+        "private_credentials_configured": settings.has_espn_credentials,
+        "demo_mode": settings.demo_mode,
+        "debug_screens_enabled": settings.debug_screens,
+    }
+    report["local"] = {
+        "league": league.name,
+        "season": league.season,
+        "team_count": draft.team_count,
+        "rounds": draft.rounds,
+        "picks_recorded": len(draft.picks),
+        "picks_from_espn": sum(1 for p in draft.picks if p.source == "espn"),
+        "picks_manual": sum(1 for p in draft.picks if p.source != "espn"),
+        "last_synced_at": draft.last_synced_at,
+    }
+    return report
+
+
+@router.delete("/diagnostics")
+def clear_diagnostics(draft: DraftSession = Depends(draft_session_dep)) -> dict:
+    """Drop the recorded attempts. Used between test runs and mock drafts."""
+    draft_diag.diagnostics.clear(draft.id)
+    return {"cleared": True}
 
 
 @router.get("/recommendations")

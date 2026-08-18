@@ -83,6 +83,18 @@ class Settings(BaseSettings):
     player_cache_ttl: int = 900
     draft_poll_interval: int = 10
 
+    #: Which ESPN path supplies live draft picks.
+    #: `auto`      -- consult both and take whichever reports more picks
+    #: `espn_api`  -- the library only (the behaviour before the fallback existed)
+    #: `direct`    -- the `mDraftDetail` endpoint only
+    espn_draft_source: str = "auto"
+
+    #: Turns on the ESPN Draft Sync Diagnostics screen. Off by default: it is a
+    #: testing tool, not a feature, and it should not be one more thing a user
+    #: has to understand. The endpoint behind it stays available either way,
+    #: because during a draft you want it without a restart.
+    debug_screens: bool = False
+
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
@@ -105,6 +117,18 @@ class Settings(BaseSettings):
         if not v.endswith("}"):
             v = v + "}"
         return v
+
+    @field_validator("espn_draft_source")
+    @classmethod
+    def _known_draft_source(cls, v: str) -> str:
+        """An unknown value falls back to `auto` rather than refusing to boot.
+
+        This setting exists so a live draft can be steered onto one path if the
+        other misbehaves. A typo in it should not be the reason the app will
+        not start ten minutes before a draft.
+        """
+        value = (v or "auto").strip().lower()
+        return value if value in {"auto", "espn_api", "direct"} else "auto"
 
     @field_validator("espn_s2", "my_team_name")
     @classmethod
