@@ -9,6 +9,7 @@ from ..engine.roster import (
     build_optimal_lineup,
     positional_strength,
     roster_construction_score,
+    starter_tiers,
 )
 from sqlalchemy.orm import Session
 
@@ -27,7 +28,24 @@ from .serializers import (
 router = APIRouter(prefix="/api/team", tags=["team"])
 
 
-def _analyse(engine, roster: list, shape) -> tuple:
+def _league_starter_tiers(session: Session, engine, league) -> dict[str, list[float]]:
+    """What the league's teams actually start, slot by slot.
+
+    This is the bar every team is graded against. Deriving it from the rosters
+    rather than from the top of the imported player pool is what keeps the
+    grade stable: importing a deeper pool used to raise the bar for everybody
+    at once, so scores fell league-wide while no roster had changed.
+    """
+    rosters = season_service.rosters_by_team(session, league)
+    lineups = [
+        engine.optimal_lineup(ids)
+        for ids in (rosters.get(team.espn_team_id) for team in league.teams)
+        if ids
+    ]
+    return starter_tiers(lineups) if lineups else {}
+
+
+def _analyse(engine, roster: list, shape, tiers: dict[str, list[float]] | None = None) -> tuple:
     """The same analysis every team gets, so comparisons are like-for-like."""
     lineup = build_optimal_lineup(roster, shape)
     conflicts = bye_week_conflicts(roster, shape)
@@ -39,6 +57,7 @@ def _analyse(engine, roster: list, shape) -> tuple:
             for position, baseline in engine.replacement.positions.items()
         },
         engine.average_starter_points(),
+        league_starter_tiers=tiers,
     )
     score, notes = roster_construction_score(
         roster, shape, strengths, conflicts, picks_made=len(roster)
@@ -63,6 +82,7 @@ def read_all_teams(
     league = context.league
 
     rosters = season_service.rosters_by_team(session, league)
+    tiers = _league_starter_tiers(session, engine, league)
 
     rows = []
     for team in league.teams:
@@ -70,7 +90,9 @@ def read_all_teams(
         if not roster_ids:
             continue
         roster = engine.roster_players(roster_ids)
-        lineup, conflicts, strengths, score, notes = _analyse(engine, roster, engine.shape)
+        lineup, conflicts, strengths, score, notes = _analyse(
+            engine, roster, engine.shape, tiers
+        )
         rows.append(
             {
                 "espn_team_id": team.espn_team_id,
@@ -167,6 +189,7 @@ def read_my_team(
             for position, baseline in engine.replacement.positions.items()
         },
         engine.average_starter_points(),
+        league_starter_tiers=_league_starter_tiers(session, engine, context.league),
     )
     score, notes = roster_construction_score(
         roster, engine.shape, strengths, conflicts, picks_made=len(my_ids)

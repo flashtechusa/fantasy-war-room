@@ -231,13 +231,57 @@ class RosterStrength:
     grade: str
 
 
+def starter_tiers(lineups: list["OptimalLineup"]) -> dict[str, list[float]]:
+    """What an average team in this league actually starts, slot by slot.
+
+    `[490.6, 418.7, 263.3]` at RB means the typical team's best starting RB
+    projects 490.6, its second 418.7, and -- among teams that start a third at
+    all -- its third 263.3.
+
+    Ranking the tiers is the whole point. Measuring every starter against one
+    league-wide *mean* punishes a team for filling its flex: the third RB adds
+    his own points to your side and a full average RB to the bar, so putting a
+    real player in your lineup could drop the position from strong to weak. He
+    belongs against other teams' third RBs, not against their first.
+    """
+    by_position: dict[str, list[list[float]]] = defaultdict(list)
+    for lineup in lineups:
+        per_team: dict[str, list[float]] = defaultdict(list)
+        for assignment in lineup.starters:
+            if assignment.player is not None:
+                per_team[assignment.player.position].append(
+                    assignment.player.projected_points
+                )
+        for position, points in per_team.items():
+            by_position[position].append(sorted(points, reverse=True))
+
+    tiers: dict[str, list[float]] = {}
+    for position, teams in by_position.items():
+        depth = max(len(t) for t in teams)
+        column: list[float] = []
+        for index in range(depth):
+            values = [t[index] for t in teams if len(t) > index]
+            column.append(round(sum(values) / len(values), 1))
+        tiers[position] = column
+    return tiers
+
+
 def positional_strength(
     roster: list[RosterPlayer],
     shape: LeagueShape,
     replacement_points: dict[str, float],
     average_starter_points: dict[str, float],
+    league_starter_tiers: dict[str, list[float]] | None = None,
 ) -> list[RosterStrength]:
-    """Compare our starters at each position to a typical team in this league."""
+    """Compare our starters at each position to a typical team in this league.
+
+    With `league_starter_tiers` the comparison is rank for rank -- your best
+    starter against the league's average best, your second against its second.
+    Without it the bar falls back to `average_starter_points`, which is the
+    mean of the top N in the imported player pool; that number moves whenever
+    the pool's size changes, even though no roster did, so the tiers are
+    preferred wherever the league's rosters are known.
+    """
     lineup = build_optimal_lineup(roster, shape)
     by_position: dict[str, list[float]] = defaultdict(list)
     for assignment in lineup.starters:
@@ -246,7 +290,7 @@ def positional_strength(
 
     out: list[RosterStrength] = []
     for position in shape.positions_in_play:
-        mine = by_position.get(position, [])
+        mine = sorted(by_position.get(position, []), reverse=True)
         # Positions we haven't drafted yet aren't "weak" -- they're unfilled, and
         # the Remaining Needs view is what speaks to those.  Grading them here
         # would bury a genuinely good early roster under phantom deficits.
@@ -256,7 +300,18 @@ def positional_strength(
         expected_each = average_starter_points.get(position, replacement)
 
         mine_total = sum(mine)
-        expected_total = expected_each * len(mine)
+        tiers = (league_starter_tiers or {}).get(position) or []
+        if tiers:
+            # Rank for rank. Past the deepest tier any team actually starts,
+            # fall back to replacement -- a slot nobody else fills is not worth
+            # an average starter.
+            expected_total = sum(
+                tiers[index] if index < len(tiers) else replacement
+                for index in range(len(mine))
+            )
+            expected_each = expected_total / len(mine)
+        else:
+            expected_total = expected_each * len(mine)
         edge = round(mine_total - expected_total, 1)
 
         spread = max(abs(expected_each) * 0.18, 12.0)

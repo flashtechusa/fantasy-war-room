@@ -1,20 +1,25 @@
-"""Why is every team's roster construction score what it is?
+"""Why is every team's roster construction score what it is -- and what changed?
 
-Run this when the scores look wrong. It prints the two numbers the grade is
-built from -- what each team actually starts, and the bar they are measured
-against -- side by side, so you can see which one moved.
+The grade is built from two numbers, and only one of them is on screen: what a
+team starts, and the bar it is measured against. When every team's score moves
+at once the rosters have not changed, so the bar has.
 
+    # what the scores are built from right now
     C:\FantasyWarRoom\.venv\Scripts\python.exe scripts\diagnose_scores.py
+
+    # what changed since a backup the auto-updater kept
+    C:\FantasyWarRoom\.venv\Scripts\python.exe scripts\diagnose_scores.py ^
+        --compare C:\FantasyWarRoom\backups\fantasy_war_room-20260817-043000.db
 
 The bar is `ValuationEngine.average_starter_points()`: the mean of the top N
 players at a position in the *imported pool*, where N is the league's total
-demand for that position. That is not the same thing as what an average team
-actually starts, and the gap between the two is what this report exposes.
+demand for that position. It is not the same thing as what an average team
+actually starts, and comparing the two is the point of this report.
 """
 
 from __future__ import annotations
 
-import os
+import argparse
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -22,74 +27,61 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "backend"))
 
-os.environ.setdefault(
-    "FWR_DATABASE_URL", f"sqlite:///{(ROOT / 'data' / 'fantasy_war_room.db').as_posix()}"
-)
+from sqlalchemy import create_engine, select  # noqa: E402
+from sqlalchemy.orm import sessionmaker  # noqa: E402
 
-from app.db import get_session_factory, init_db  # noqa: E402
 from app.engine.roster import (  # noqa: E402
     bye_week_conflicts,
     positional_strength,
     roster_construction_score,
 )
-from app.models import League, Player  # noqa: E402
+from app.models import League  # noqa: E402
 from app.services import board as board_service  # noqa: E402
 from app.services import season as season_service  # noqa: E402
 
+DEFAULT_DB = ROOT / "data" / "fantasy_war_room.db"
 
-def main() -> int:
-    init_db()
-    session = get_session_factory()()
 
-    league = (
-        session.query(League).order_by(League.imported_at.desc()).first()
-    )
+def open_db(path: Path):
+    if not path.exists():
+        raise SystemExit(f"No database at {path}")
+    engine = create_engine(f"sqlite:///{path.as_posix()}", future=True)
+    return sessionmaker(bind=engine, future=True)()
+
+
+def snapshot(path: Path) -> dict:
+    """Everything the score is built from, for one database file."""
+    session = open_db(path)
+    league = session.scalars(
+        select(League).order_by(League.imported_at.desc())
+    ).first()
     if league is None:
-        print("No league imported. Nothing to diagnose.")
-        return 1
+        raise SystemExit(f"{path.name} holds no imported league.")
 
-    weeks = league.regular_season_weeks or 17
-    print(f"League : {league.name} ({league.season}), {league.team_count} teams")
-    print(f"Source : {league.source}")
-    print(f"Pool   : {session.query(Player).filter(Player.season == league.season).count()} players")
-    print(f"Weeks  : {weeks} (per-week figures below divide by this)\n")
-
+    # The cache is keyed on league identity, which two database files share.
+    board_service.clear_cache()
     engine = board_service.build_engine(session, league)
     shape = engine.shape
     bar = engine.average_starter_points()
 
-    # ---- the bar, and whether it is even being computed over enough players --
-    print("THE BAR each team is measured against")
-    print("  pos  pool   N used   truncated   bar/season   bar/week")
-    truncated = []
-    for position in sorted(bar):
-        group = engine._by_position.get(position, [])
+    pool: dict[str, int] = {}
+    demand_slots: dict[str, int] = {}
+    top_n: dict[str, list[tuple[str, float]]] = {}
+    for position, group in engine._by_position.items():
         demand = engine.replacement.positions.get(position)
         slots = shape.league_starter_demand(position)
         if demand is not None:
             slots = max(slots + demand.flex_demand, 1)
         slots = max(slots, 1)
-        short = len(group) < slots
-        if short:
-            truncated.append(position)
-        print(
-            f"  {position:4} {len(group):5} {slots:8} {'YES' if short else 'no':>11}"
-            f" {bar[position]:12.1f} {bar[position] / weeks:10.1f}"
-        )
+        pool[position] = len(group)
+        demand_slots[position] = slots
+        top_n[position] = [
+            (p.name, round(engine._points[p.espn_player_id], 1)) for p in group[:slots]
+        ]
 
-    if truncated:
-        print(
-            f"\n  !! {', '.join(truncated)}: the pool holds fewer players than the league\n"
-            "     starts, so the bar is the average of only the elite ones. Every\n"
-            "     team will read as below average here. Re-import with a deeper\n"
-            "     player list."
-        )
-
-    # ---- what teams actually start ------------------------------------------
     rosters = season_service.rosters_by_team(session, league)
-    actual: dict[str, list[float]] = defaultdict(list)
-    scored = []
-
+    started: dict[str, list[float]] = defaultdict(list)
+    teams = []
     for team in league.teams:
         ids = rosters.get(team.espn_team_id) or set()
         if not ids:
@@ -98,7 +90,7 @@ def main() -> int:
         lineup = engine.optimal_lineup(ids)
         for assignment in lineup.starters:
             if assignment.player is not None:
-                actual[assignment.player.position].append(
+                started[assignment.player.position].append(
                     assignment.player.projected_points
                 )
         strengths = positional_strength(
@@ -108,45 +100,164 @@ def main() -> int:
             bar,
         )
         score, _ = roster_construction_score(
-            roster, shape, strengths, bye_week_conflicts(roster, shape),
-            picks_made=len(roster),
+            roster, shape, strengths,
+            bye_week_conflicts(roster, shape), picks_made=len(roster),
         )
-        scored.append((team.name, score, sum(s.edge for s in strengths), len(roster)))
+        teams.append(
+            {
+                "name": team.name,
+                "score": score,
+                "edge": round(sum(s.edge for s in strengths), 1),
+                "size": len(roster),
+            }
+        )
 
-    if not scored:
-        print("\nNo rosters found -- nothing to compare the bar against.")
-        return 0
+    return {
+        "path": path,
+        "league": league,
+        "weeks": league.regular_season_weeks or 17,
+        "pool_total": len(engine.players),
+        "bar": bar,
+        "pool": pool,
+        "slots": demand_slots,
+        "top_n": top_n,
+        "started": dict(started),
+        "teams": teams,
+        "points": {
+            p.name: round(engine._points[p.espn_player_id], 1) for p in engine.players
+        },
+    }
 
-    print(f"\nWHAT {len(scored)} TEAMS ACTUALLY START")
-    print("  pos   avg started   the bar   gap      slots started")
-    for position in sorted(actual):
-        values = actual[position]
-        mean = sum(values) / len(values)
+
+def report(snap: dict) -> None:
+    league, weeks = snap["league"], snap["weeks"]
+    print(f"League : {league.name} ({league.season}), {league.team_count} teams")
+    print(f"Source : {league.source}   imported {league.imported_at}")
+    print(f"Pool   : {snap['pool_total']} players")
+    print(f"Weeks  : {weeks} (per-week figures divide by this)\n")
+
+    print("THE BAR each team is measured against")
+    print("  pos  pool   N used   truncated   bar/season   bar/week")
+    thin = []
+    for position in sorted(snap["bar"]):
+        n, slots = snap["pool"][position], snap["slots"][position]
+        short = n < slots
+        if short:
+            thin.append(position)
+        value = snap["bar"][position]
         print(
-            f"  {position:4} {mean:13.1f} {bar.get(position, 0.0):9.1f}"
-            f" {mean - bar.get(position, 0.0):+7.1f} {len(values):16}"
+            f"  {position:4} {n:5} {slots:8} {'YES' if short else 'no':>11}"
+            f" {value:12.1f} {value / weeks:10.1f}"
+        )
+    if thin:
+        print(
+            f"\n  !! {', '.join(thin)}: the pool holds fewer players than the league\n"
+            "     starts, so the bar averages only the ones that exist. Re-import\n"
+            "     with a deeper player list."
+        )
+
+    if not snap["teams"]:
+        print("\nNo rosters found -- nothing to compare the bar against.")
+        return
+
+    print(f"\nWHAT {len(snap['teams'])} TEAMS ACTUALLY START")
+    print("  pos   avg started   the bar   gap      slots started")
+    for position in sorted(snap["started"]):
+        values = snap["started"][position]
+        mean = sum(values) / len(values)
+        bar = snap["bar"].get(position, 0.0)
+        print(
+            f"  {position:4} {mean:13.1f} {bar:9.1f} {mean - bar:+7.1f} {len(values):16}"
         )
 
     print("\nEVERY TEAM, SAME YARDSTICK")
     print("  score   edge total   size   team")
-    for name, score, edge, size in sorted(scored, key=lambda r: -r[1]):
-        flag = "  <-- edge clamped" if abs(edge) > 240 else ""
-        print(f"  {score:5.1f} {edge:12.1f} {size:6}   {name}{flag}")
+    for team in sorted(snap["teams"], key=lambda t: -t["score"]):
+        flag = "  <-- edge clamped" if abs(team["edge"]) > 240 else ""
+        print(
+            f"  {team['score']:5.1f} {team['edge']:12.1f} {team['size']:6}"
+            f"   {team['name']}{flag}"
+        )
 
-    edges = [row[2] for row in scored]
+    edges = [t["edge"] for t in snap["teams"]]
     below = sum(1 for e in edges if e < 0)
     clamped = sum(1 for e in edges if abs(e) > 240)
     print(
-        f"\n  {below} of {len(scored)} teams are below the bar overall.\n"
-        f"  {clamped} of {len(scored)} have an edge past +/-240, where the score stops\n"
-        "  distinguishing between them -- the edge term is clamped to +/-20 points."
+        f"\n  {below} of {len(edges)} teams are below the bar overall.\n"
+        f"  {clamped} of {len(edges)} are past +/-240, where the score stops telling\n"
+        "  them apart -- the edge term is clamped to +/-20 points."
     )
-    if below >= len(scored) * 0.75:
+    if below >= len(edges) * 0.75:
         print(
             "\n  When nearly every team is below the bar, the bar is the problem,\n"
-            "  not the rosters: these teams hold most of the players it is built\n"
-            "  from."
+            "  not the rosters: these teams hold most of the players it is built from."
         )
+
+
+def compare(now: dict, then: dict) -> None:
+    print("\n" + "=" * 68)
+    print(f"WHAT CHANGED since {then['path'].name}")
+    print("=" * 68)
+    print(f"  imported : {then['league'].imported_at}  ->  {now['league'].imported_at}")
+    print(f"  pool     : {then['pool_total']}  ->  {now['pool_total']}"
+          f"  ({now['pool_total'] - then['pool_total']:+d} players)\n")
+
+    print("  THE BAR")
+    print("  pos    then      now     move   pool then -> now")
+    for position in sorted(set(now["bar"]) | set(then["bar"])):
+        a, b = then["bar"].get(position, 0.0), now["bar"].get(position, 0.0)
+        print(
+            f"  {position:4} {a:8.1f} {b:8.1f} {b - a:+8.1f}"
+            f"   {then['pool'].get(position, 0):5} -> {now['pool'].get(position, 0)}"
+        )
+
+    print("\n  BIGGEST PROJECTION MOVES (these are what move the bar)")
+    moves = []
+    for name, points in now["points"].items():
+        before = then["points"].get(name)
+        if before is None:
+            moves.append((points, name, None, points))
+        elif abs(points - before) > 0.05:
+            moves.append((abs(points - before), name, before, points))
+    moves.sort(reverse=True)
+    if not moves:
+        print("    None. Every player projects exactly what they did before.")
+    for _size, name, before, after in moves[:25]:
+        was = "NEW" if before is None else f"{before:.1f}"
+        print(f"    {name:28} {was:>8} -> {after:8.1f}")
+    if len(moves) > 25:
+        print(f"    ... and {len(moves) - 25} more")
+
+    gone = sorted(set(then["points"]) - set(now["points"]))
+    if gone:
+        print(f"\n  DROPPED FROM THE POOL ({len(gone)}): {', '.join(gone[:15])}"
+              f"{' ...' if len(gone) > 15 else ''}")
+
+    print("\n  TEAM SCORES")
+    before_by_name = {t["name"]: t for t in then["teams"]}
+    for team in sorted(now["teams"], key=lambda t: -t["score"]):
+        old = before_by_name.get(team["name"])
+        if old is None:
+            print(f"    {team['name']:28} {'NEW':>8} -> {team['score']:6.1f}")
+        else:
+            print(
+                f"    {team['name']:28} {old['score']:8.1f} -> {team['score']:6.1f}"
+                f"   ({team['score'] - old['score']:+.1f})"
+            )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path, default=DEFAULT_DB, help="database to read")
+    parser.add_argument(
+        "--compare", type=Path, help="an older database to diff against, e.g. a backup"
+    )
+    args = parser.parse_args()
+
+    now = snapshot(args.db)
+    report(now)
+    if args.compare:
+        compare(now, snapshot(args.compare))
     return 0
 
 
