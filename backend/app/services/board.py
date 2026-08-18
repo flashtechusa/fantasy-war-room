@@ -30,12 +30,14 @@ class _CacheEntry:
     engine: ValuationEngine
 
 
-_cache: _CacheEntry | None = None
+#: Keyed by league, because the engine is identical for everyone in a league --
+#: the per-user parts (my roster, my picks) are computed outside it. A single
+#: slot would thrash the moment two people in different leagues were signed in.
+_cache: dict[tuple, _CacheEntry] = {}
 
 
 def clear_cache() -> None:
-    global _cache
-    _cache = None
+    _cache.clear()
 
 
 def league_shape(league: League) -> LeagueShape:
@@ -99,8 +101,6 @@ def _blend_raw_stats(
 
 def build_engine(session: Session, league: League) -> ValuationEngine:
     """Cached ValuationEngine for a league."""
-    global _cache
-
     latest_player = session.scalars(
         select(Player.updated_at)
         .where(Player.season == league.season)
@@ -113,8 +113,9 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
         latest_player,
         tuple(sorted((r.stat_id, r.points) for r in league.scoring_rules)),
     )
-    if _cache is not None and _cache.key == key:
-        return _cache.engine
+    cached = _cache.get(key)
+    if cached is not None:
+        return cached.engine
 
     weights = {
         source.key: source.weight
@@ -164,7 +165,12 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
         players=inputs,
         source=league.source,
     )
-    _cache = _CacheEntry(key=key, engine=engine)
+    _cache[key] = _CacheEntry(key=key, engine=engine)
+    # Bound it: a busy install should not accumulate an engine per league
+    # forever, and rebuilding one is cheap next to serving a stale board.
+    if len(_cache) > 16:
+        for stale in list(_cache)[:-8]:
+            _cache.pop(stale, None)
     return engine
 
 

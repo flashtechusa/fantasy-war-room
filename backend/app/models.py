@@ -426,3 +426,31 @@ class BetaRequest(Base):
     note: Mapped[str] = mapped_column(String(1000), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     handled: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class UserEspnConfig(Base):
+    """One user's ESPN connection.
+
+    Separate from the global `AppConfig` so two people can point at two
+    different leagues from the same install. Cookies are stored encrypted --
+    they are live session credentials for someone's ESPN account, not API keys.
+    """
+
+    __tablename__ = "user_espn_config"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+
+    espn_league_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    espn_season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Fernet ciphertext, never the raw cookie.
+    espn_swid_encrypted: Mapped[str] = mapped_column(String(600), default="")
+    espn_s2_encrypted: Mapped[str] = mapped_column(String(2000), default="")
+
+    my_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    faab_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )

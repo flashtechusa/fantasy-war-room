@@ -16,16 +16,23 @@ from ..services import draft as draft_service
 from ..services.board import LeagueNotImported, build_board, build_engine
 from ..services import season as season_service
 from ..services.importer import get_active_league
-from ..services.runtime_config import effective_settings
+from ..services.runtime_config import settings_for_user
+from .routes_auth import current_user
 
 
-def settings_dep(session: Session = Depends(get_db)) -> Settings:
-    """Environment settings with any UI-entered overrides applied.
+def settings_dep(
+    session: Session = Depends(get_db),
+    user=Depends(current_user),
+) -> Settings:
+    """Settings as they apply to whoever is signed in.
 
-    Every route that touches ESPN goes through this, so credentials typed into
-    the app take effect immediately without a restart.
+    Every route that touches ESPN goes through this, which is what makes the
+    app multi-tenant: two people signed in at once resolve to their own
+    leagues and their own credentials. A user without a connection of their
+    own falls through to the install-wide one, so a single-user install
+    behaves exactly as it did before accounts existed.
     """
-    return effective_settings(session, get_settings())
+    return settings_for_user(session, user, get_settings())
 
 
 def league_dep(

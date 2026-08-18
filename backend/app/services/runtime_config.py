@@ -119,3 +119,91 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "ready_for_espn": settings.can_reach_espn,
         "sources": {key: source(key) for key in OVERRIDABLE},
     }
+
+
+# ---------------------------------------------------------------------------
+# Per-user configuration
+# ---------------------------------------------------------------------------
+
+
+def user_config(session: Session, user) -> "UserEspnConfig | None":
+    from ..models import UserEspnConfig
+
+    if user is None:
+        return None
+    return session.scalars(
+        select(UserEspnConfig).where(UserEspnConfig.user_id == user.id)
+    ).first()
+
+
+def settings_for_user(session: Session, user, base: Settings | None = None) -> Settings:
+    """Settings as they apply to one signed-in person.
+
+    Layered: environment, then the install-wide overrides, then this user's own
+    ESPN connection. The user layer is what makes the app multi-tenant -- two
+    people signed in at once resolve to two different leagues.
+
+    A user with no connection of their own falls through to the install-wide
+    one. That keeps a single-user install (the owner's) working exactly as it
+    did before accounts existed.
+    """
+    from ..services import secrets as secret_store
+
+    base = effective_settings(session, base)
+    config = user_config(session, user)
+    if config is None:
+        return base
+
+    merged = base.model_dump()
+    if config.espn_league_id is not None:
+        merged["espn_league_id"] = config.espn_league_id
+    if config.espn_season is not None:
+        merged["espn_season"] = config.espn_season
+    if config.espn_swid_encrypted:
+        merged["espn_swid"] = secret_store.decrypt(config.espn_swid_encrypted)
+    if config.espn_s2_encrypted:
+        merged["espn_s2"] = secret_store.decrypt(config.espn_s2_encrypted)
+    if config.my_team_id is not None:
+        merged["my_team_id"] = config.my_team_id
+    if config.faab_remaining is not None:
+        merged["faab_remaining"] = config.faab_remaining
+
+    # A user with their own league is not in demo mode, whatever the install
+    # default says -- otherwise their real league would be silently ignored.
+    if config.espn_league_id is not None:
+        merged["demo_mode"] = False
+
+    return Settings.model_validate(merged)
+
+
+def save_user_config(session: Session, user, values: dict) -> "UserEspnConfig":
+    """Store one user's ESPN connection, encrypting the cookies."""
+    from ..models import UserEspnConfig
+    from ..services import secrets as secret_store
+
+    config = user_config(session, user)
+    if config is None:
+        config = UserEspnConfig(user_id=user.id)
+        session.add(config)
+
+    if "espn_league_id" in values and values["espn_league_id"] is not None:
+        config.espn_league_id = int(values["espn_league_id"])
+    if "espn_season" in values and values["espn_season"] is not None:
+        config.espn_season = int(values["espn_season"])
+    if "my_team_id" in values:
+        config.my_team_id = values["my_team_id"]
+    if "faab_remaining" in values:
+        config.faab_remaining = values["faab_remaining"]
+
+    # Blank means "leave what is stored"; explicit empty string clears it.
+    if values.get("espn_swid"):
+        config.espn_swid_encrypted = secret_store.encrypt(values["espn_swid"])
+    elif values.get("espn_swid") == "":
+        config.espn_swid_encrypted = ""
+    if values.get("espn_s2"):
+        config.espn_s2_encrypted = secret_store.encrypt(values["espn_s2"])
+    elif values.get("espn_s2") == "":
+        config.espn_s2_encrypted = ""
+
+    session.flush()
+    return config

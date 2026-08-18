@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..espn.client import EspnClient, EspnConnectionError
 from ..services import board as board_service
+from ..services import runtime_config
+from .routes_auth import require_user
 from ..services.runtime_config import (
     clear_overrides,
     describe,
@@ -38,6 +40,49 @@ class EspnConfigRequest(BaseModel):
     # meant a saved API key was silently discarded while the app reported
     # success -- failing loudly would have caught it immediately.
     model_config = {"extra": "forbid"}
+
+
+@router.get("/mine")
+def read_my_config(
+    session: Session = Depends(get_db), user=Depends(require_user)
+) -> dict:
+    """This user's own ESPN connection. Secrets are reported as set/unset."""
+    config = runtime_config.user_config(session, user)
+    if config is None:
+        return {
+            "configured": False,
+            "espn_league_id": None,
+            "espn_season": None,
+            "swid_set": False,
+            "espn_s2_set": False,
+            "my_team_id": None,
+        }
+    return {
+        "configured": config.espn_league_id is not None,
+        "espn_league_id": config.espn_league_id,
+        "espn_season": config.espn_season,
+        "swid_set": bool(config.espn_swid_encrypted),
+        "espn_s2_set": bool(config.espn_s2_encrypted),
+        "my_team_id": config.my_team_id,
+    }
+
+
+@router.put("/mine")
+def save_my_config(
+    payload: EspnConfigRequest,
+    session: Session = Depends(get_db),
+    user=Depends(require_user),
+) -> dict:
+    """Point this account at its own league.
+
+    Separate from the install-wide settings so two people can use one install
+    without seeing each other's team. Cookies are encrypted before storage.
+    """
+    values = payload.model_dump(exclude_unset=True)
+    runtime_config.save_user_config(session, user, values)
+    session.commit()
+    board_service.clear_cache()
+    return read_my_config(session, user)
 
 
 @router.get("")
