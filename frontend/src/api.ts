@@ -471,6 +471,8 @@ export interface TradeResponse {
 
 export interface SeasonRoster {
   week: number
+  team_id: number | null
+  team_name: string
   players: WeekPlayer[]
   teams: { espn_team_id: number; name: string; is_mine: boolean }[]
 }
@@ -633,8 +635,13 @@ export const api = {
       `/api/season/waivers/refresh${week ? `?week=${week}` : ''}`,
       { method: 'POST' },
     ),
-  seasonRoster: (week?: number) =>
-    request<SeasonRoster>(`/api/season/roster${week ? `?week=${week}` : ''}`),
+  seasonRoster: (week?: number, teamId?: number) => {
+    const query = new URLSearchParams()
+    if (week) query.set('week', String(week))
+    if (teamId) query.set('team_id', String(teamId))
+    const suffix = query.toString()
+    return request<SeasonRoster>(`/api/season/roster${suffix ? `?${suffix}` : ''}`)
+  },
   analyseTrade: (body: {
     give: number[]
     receive: number[]

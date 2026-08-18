@@ -322,19 +322,42 @@ def trade(
 @router.get("/roster")
 def roster(
     week: int | None = Query(None, ge=1, le=18),
+    team_id: int | None = Query(
+        None, description="ESPN team id. Omit for my own roster."
+    ),
     session: Session = Depends(get_db),
     league: League = Depends(league_dep),
     engine: ValuationEngine = Depends(engine_dep),
     settings: Settings = Depends(settings_dep),
 ) -> dict:
-    """My roster with this week's numbers -- the picker for the trade screen."""
+    """A roster with this week's numbers -- the picker for the trade screen.
+
+    Takes a team id because a trade needs both sides. Without it this returned
+    only my own roster, so the other team's picker was filtered against players
+    that could never be in it and always came back empty.
+    """
     week = _resolve_week(week, settings)
-    roster_ids = season_service.my_roster_ids(session, league)
+
+    if team_id is None:
+        roster_ids = season_service.my_roster_ids(session, league)
+        team_name = next((t.name for t in league.teams if t.is_mine), "My team")
+    else:
+        team = next((t for t in league.teams if t.espn_team_id == team_id), None)
+        if team is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No team {team_id} in this league.",
+            )
+        roster_ids = season_service.team_roster_ids(league, team_id)
+        team_name = team.name
+
     players = season_service.build_weekly_players(
         session, league, engine, week, espn_player_ids=roster_ids
     )
     return {
         "week": week,
+        "team_id": team_id,
+        "team_name": team_name,
         "players": [_serialize_player(p) for p in players],
         "teams": [
             {"espn_team_id": t.espn_team_id, "name": t.name, "is_mine": t.is_mine}

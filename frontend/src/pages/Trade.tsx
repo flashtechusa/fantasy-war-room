@@ -121,16 +121,17 @@ export default function Trade() {
       setTheirRoster([])
       return
     }
-    // Their roster comes from the league import; ask the API for the week's
-    // numbers on everyone so the picker shows real projections.
+    // Ask the API for *their* roster directly. This used to fetch my own and
+    // filter it by their player ids, which could never match anything, so the
+    // picker was always empty.
     try {
-      const league = await api.league()
-      const team = league.teams.find((t) => t.espn_team_id === teamId)
-      const ids = new Set((team?.roster ?? []).map((p) => (p as never as { espn_player_id: number }).espn_player_id))
-      const all = await api.seasonRoster()
-      setTheirRoster(all.players.filter((p) => ids.has(p.espn_player_id)))
-      if (ids.size === 0) setError('That team has no roster imported yet.')
-      else setError(null)
+      const theirs = await api.seasonRoster(undefined, teamId)
+      setTheirRoster(theirs.players)
+      setError(
+        theirs.players.length === 0
+          ? 'That team has no roster imported yet. Re-import on the League tab.'
+          : null,
+      )
     } catch (err) {
       setError((err as Error).message)
     }
