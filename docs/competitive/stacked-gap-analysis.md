@@ -236,6 +236,94 @@ script written after the fact.
 
 ---
 
+## How the URL takeover actually works, and what it costs
+
+This was the question the teardown was commissioned to answer, so it gets its
+own section. There is no mechanism here we do not already have.
+
+### The claim, split into three platforms
+
+"Type the site name in front of your draft URL and you are in our war room,
+no install, picks syncing live" is one sentence describing three very
+different engineering situations.
+
+**Sleeper — genuinely zero-auth.** Sleeper's read API is public and
+unauthenticated. Draft picks for any draft id are readable by anyone with no
+key, no cookie and no OAuth. A URL convention is all that is needed, because
+the draft id in the host URL is the only input. This is why their headline
+example is a Sleeper URL, and it would be true of anybody's implementation.
+
+**ESPN — depends entirely on whether the league is public.**
+
+  * *Public league*: no credentials at all. A league id is sufficient. We can
+    already do this — `EspnHttpClient._cookie_header()` returns an empty dict
+    when no credentials are set, and anonymous requests are a first-class path
+    through `espn/http.py`. `espn-api` behaves the same way; it only demands
+    cookies after a 401 (`espn_requests.py`: "espn_s2 and swid are required"
+    is raised on the access-denied branch, not up front).
+  * *Private league*: `SWID` and `espn_s2` are required, and **`espn_s2` is an
+    `HttpOnly` cookie**. No page script, bookmarklet, URL convention or
+    same-site trick can read it — that is a browser security guarantee, not an
+    ESPN policy, and it applies to them exactly as it applies to us.
+
+**Yahoo — three-legged OAuth.** Registered app, consent screen, refresh
+tokens. No cookie shortcut exists. This is the most work of the three and
+nothing about a URL convention changes it.
+
+### So what is the trick?
+
+The URL takeover is **routing convenience, not an authentication method**. Note
+that the teardown lists it *and* "League Sync, connected once, all season" as
+separate capabilities. Those are two mechanisms: credentials are established
+once in a normal connect flow, and the URL convention is a fast path into a
+draft room for an account that is already connected — plus a genuinely
+credential-free path for public leagues and for all of Sleeper.
+
+Read that way, it is a good idea we should borrow, and it is cheap. What it is
+not is a way around `HttpOnly`.
+
+### Our browser extension is not the wrong call
+
+It solves a different problem: capturing `espn_s2` for a **private** league
+without asking a non-technical client to open developer tools. That is exactly
+the drafter's clientele. `chrome.cookies` is the only browser interface that
+can read an `HttpOnly` cookie, which is stated in `browser-extension/README.md`
+and is still true. Keep it.
+
+### What is reachable for us today
+
+A route like `/draft/espn/{leagueId}` that tries anonymously first and falls
+back to "this league is private, connect ESPN" is a **small** build on parts
+that already exist:
+
+| Piece | Status |
+|---|---|
+| Anonymous ESPN HTTP | `espn/http.py` — supported, **untested** |
+| Read a league cold from an id | `espn/discovery.py` `league_preview` — takes any client, credentialed or not |
+| Live draft board | `espn/draft_feed.py` `fetch_draft_snapshot` (`view=mDraftDetail`) |
+| Valuation with no account | `services/board.py` `build_engine` needs only a `League` row |
+
+The gap is not capability, it is that **no test covers the anonymous path** and
+no route exposes it. That is the actual work.
+
+This is also the best demo surface we could have: someone in a public league
+pastes a league id and sees a working war room with no account, no cookies and
+no extension — which is a far better first touch than the current
+sign-in-then-connect sequence.
+
+### One claim to treat sceptically
+
+"Picks sync live in **both** directions" implies writing picks back to the host
+platform. For ESPN that is not possible with `espn-api` — the library has two
+request helpers, `league_get` and `get`, and no POST path of any kind. It would
+mean hand-rolling ESPN's private transaction endpoint. Sleeper does not expose
+public writes either. Given the same page carries placeholder social-proof
+counters and a war room labelled in progress, treat the bidirectional claim as
+unverified rather than as a capability to match. We should not match it in any
+case: `docs/product-direction.md` refuses writes on liability grounds.
+
+---
+
 ## Open questions
 
 Things this analysis depends on that the repo cannot answer:
