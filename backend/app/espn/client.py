@@ -50,6 +50,16 @@ class EspnConnectionError(RuntimeError):
     """Raised when we cannot talk to ESPN for this league."""
 
 
+class EspnNotConfigured(EspnConnectionError):
+    """No league is connected to this account.
+
+    A subclass so every existing handler still catches it, but distinct enough
+    that a route can say "connect a league" instead of "ESPN is unreachable" --
+    they need opposite things from the reader.
+    """
+
+
+
 @dataclass
 class LiveDraftResult:
     """Picks plus the provenance the diagnostics screen reports.

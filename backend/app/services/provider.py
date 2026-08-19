@@ -11,7 +11,12 @@ from typing import Protocol
 
 from ..config import Settings, get_settings
 from ..espn import demo
-from ..espn.client import EspnClient, EspnConnectionError, PlayerRecord
+from ..espn.client import (
+    EspnClient,
+    EspnConnectionError,
+    EspnNotConfigured,
+    PlayerRecord,
+)
 from ..espn.http import EspnHttpClient
 
 
@@ -117,14 +122,22 @@ class EspnProvider:
 def build_provider(settings: Settings | None = None) -> DataProvider:
     """Pick the provider for the current configuration.
 
-    Demo mode, or no league id configured, means synthetic data.  Otherwise we
-    go to ESPN and let connection errors surface to the caller -- silently
-    falling back to fake data during a live draft would be much worse than an
-    error message.
+    Only an explicit demo mode gets synthetic data. "No league configured"
+    used to land here too, which meant a signed-in account that had not
+    connected ESPN yet imported 330 fabricated players -- into a pool keyed by
+    season and shared with every real league in it. One curious click by a
+    client account moved the bar under all twelve teams in the owner's league.
+
+    Not knowing which league to import is an error, and it says so.
     """
     settings = settings or get_settings()
-    if settings.demo_mode or settings.espn_league_id is None:
+    if settings.demo_mode:
         return DemoProvider(settings.espn_season)
+    if settings.espn_league_id is None:
+        raise EspnNotConfigured(
+            "No ESPN league is connected to this account. Add your league on "
+            "the League screen, or use Connect ESPN to find it, before importing."
+        )
     return EspnProvider(
         EspnClient(
             league_id=settings.espn_league_id,

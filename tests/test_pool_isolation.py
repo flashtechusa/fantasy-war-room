@@ -169,3 +169,69 @@ class TestTheSourceColumnIsBackfilled:
 
         assert rows["Justin Herbert"] == "espn"
         assert rows["Jalen Fontaine"] == "demo", "demo id band was not recognised"
+
+
+class TestAnAccountWithNoLeagueCannotImport:
+    """How the fabricated players got in: a client account clicked Import.
+
+    A signed-in user with no ESPN connection resolved to settings with no
+    league id, and "no league id" selected the demo provider. Importing then
+    wrote 330 synthetic players into a pool keyed by season -- shared with the
+    owner's real league in that same season.
+    """
+
+    def test_no_connection_means_no_provider(self):
+        import pytest
+
+        from app.config import Settings
+        from app.espn.client import EspnNotConfigured
+        from app.services.provider import build_provider
+
+        with pytest.raises(EspnNotConfigured):
+            build_provider(Settings(demo_mode=False, _env_file=None))
+
+    def test_explicit_demo_mode_still_works(self):
+        from app.config import Settings
+        from app.services.provider import DemoProvider, build_provider
+
+        assert isinstance(
+            build_provider(Settings(demo_mode=True, _env_file=None)), DemoProvider
+        )
+
+    def test_a_client_account_importing_is_told_to_connect_a_league(self, anon_client):
+        """End to end, the way it actually happened.
+
+        Ari signed in, pressed Import to see how it worked, and the app made
+        her a league out of thin air.
+        """
+        from app.db import session_scope
+        from app.models import Player
+        from app.services import auth as auth_service
+
+        with session_scope() as session:
+            auth_service.ensure_owner(session, "owner", "owner-password-1")
+            session.commit()
+
+        anon_client.post(
+            "/api/auth/login",
+            json={"username": "owner", "password": "owner-password-1"},
+        )
+        created = anon_client.post(
+            "/api/admin/users", json={"username": "ari", "role": "client"}
+        ).json()
+
+        anon_client.post("/api/auth/logout")
+        signed_in = anon_client.post(
+            "/api/auth/login",
+            json={"username": "ari", "password": created["password"]},
+        )
+        assert signed_in.status_code == 200, signed_in.text
+
+        response = anon_client.post("/api/league/import")
+        assert response.status_code == 409, response.text
+        assert "connect" in response.json()["detail"].lower()
+
+        with session_scope() as session:
+            assert session.query(Player).count() == 0, (
+                "a client with no ESPN connection created players"
+            )

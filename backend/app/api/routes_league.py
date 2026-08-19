@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db import get_db
-from ..espn.client import EspnConnectionError
+from ..espn.client import EspnConnectionError, EspnNotConfigured
 from ..models import HistoricalDraftPick, League, Player, ProjectionSource
 from ..projections.fantasypros import FantasyProsError
 from ..services import board as board_service
@@ -53,8 +53,11 @@ def run_import(
 ) -> dict:
     """Connect to ESPN (or the demo provider) and import everything."""
     payload = payload or ImportRequest()
-    provider = build_provider(settings)
     try:
+        # Inside the try: choosing a provider is the step that fails when the
+        # account has no league connected, and that has to reach the user as
+        # an instruction rather than a 500.
+        provider = build_provider(settings)
         league = import_league(
             session,
             provider=provider,
@@ -62,6 +65,10 @@ def run_import(
             include_players=payload.include_players,
             include_history=payload.include_history,
         )
+    except EspnNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except EspnConnectionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface the real reason to the UI
@@ -97,6 +104,10 @@ def refresh_players(
     """Re-pull just the player pool (ADP and injuries move; league rules don't)."""
     try:
         count = import_players(session, league, build_provider(settings), settings)
+    except EspnNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except EspnConnectionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     board_service.clear_cache()

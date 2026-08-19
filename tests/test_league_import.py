@@ -24,10 +24,20 @@ class TestProviderSelection:
 
         assert isinstance(build_provider(Settings(demo_mode=True, _env_file=None)), DemoProvider)
 
-    def test_missing_league_id_falls_back_to_demo(self):
-        from app.config import Settings
+    def test_missing_league_id_is_an_error_not_demo_data(self):
+        """The reverse of what this asserted, because the old answer was a bug.
 
-        assert isinstance(build_provider(Settings(demo_mode=False, _env_file=None)), DemoProvider)
+        Falling back to synthetic data meant an account with no ESPN connection
+        imported 330 fabricated players into a pool shared by season with every
+        real league -- moving the bar under all twelve teams in someone else's.
+        """
+        import pytest
+
+        from app.config import Settings
+        from app.espn.client import EspnNotConfigured
+
+        with pytest.raises(EspnNotConfigured):
+            build_provider(Settings(demo_mode=False, _env_file=None))
 
     def test_configured_league_uses_espn(self):
         from app.config import Settings

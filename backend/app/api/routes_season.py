@@ -14,7 +14,7 @@ from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
 from ..engine.waivers import recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
-from ..espn.client import EspnConnectionError
+from ..espn.client import EspnConnectionError, EspnNotConfigured
 from ..models import League
 from ..services import season as season_service
 from ..services.board import league_shape
@@ -151,6 +151,10 @@ def refresh_waivers(
         count = import_free_agents(
             session, league, build_provider(settings), settings, week=week
         )
+    except EspnNotConfigured as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
     except EspnConnectionError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     from ..services import board as board_service
