@@ -103,7 +103,7 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
     """Cached ValuationEngine for a league."""
     latest_player = session.scalars(
         select(Player.updated_at)
-        .where(Player.season == league.season)
+        .where(Player.season == league.season, Player.source == league.source)
         .order_by(Player.updated_at.desc())
         .limit(1)
     ).first()
@@ -111,6 +111,7 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
         league.id,
         league.imported_at,
         latest_player,
+        league.source,
         tuple(sorted((r.stat_id, r.points) for r in league.scoring_rules)),
     )
     cached = _cache.get(key)
@@ -126,7 +127,16 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
     if not weights:
         weights = {"espn": 1.0, "demo": 1.0}
 
-    players = session.scalars(select(Player).where(Player.season == league.season)).all()
+    # Scoped to the league's own provider. Real and synthetic players share one
+    # season-keyed table, so without this a demo import puts fake players into
+    # a real league's rankings -- which is exactly what happened: 330 of them
+    # took over the top of every position, moved replacement level, and were
+    # offered as free agents.
+    players = session.scalars(
+        select(Player).where(
+            Player.season == league.season, Player.source == league.source
+        )
+    ).all()
     if not players:
         raise LeagueNotImported(
             "No players imported for this season. Run an import from League Settings."

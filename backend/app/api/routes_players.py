@@ -83,6 +83,7 @@ def _source_projections(
     player = session.scalars(
         select(Player).where(
             Player.season == league.season,
+            Player.source == league.source,
             Player.espn_player_id == espn_player_id,
         )
     ).first()

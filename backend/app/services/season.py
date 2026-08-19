@@ -47,6 +47,7 @@ def weekly_points_by_player(
         .where(
             PlayerWeeklyProjection.week == week,
             Player.season == league.season,
+            Player.source == league.source,
         )
     ).all()
 
@@ -86,7 +87,9 @@ def build_weekly_players(
     scoring = engine.scoring
     week_points = weekly_points_by_player(session, league, scoring, week)
 
-    stmt = select(Player).where(Player.season == league.season)
+    stmt = select(Player).where(
+        Player.season == league.season, Player.source == league.source
+    )
     if espn_player_ids is not None:
         if not espn_player_ids:
             return []

@@ -66,8 +66,46 @@ def get_session_factory() -> sessionmaker[Session]:
     return _SessionLocal
 
 
+#: Demo players are numbered from 100000 up. Real ESPN ids sit far outside
+#: that band, so it identifies synthetic rows in a database that predates the
+#: `source` column.
+DEMO_ID_RANGE = (100000, 100999)
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=get_engine())
+    _add_missing_columns()
+
+
+def _add_missing_columns() -> None:
+    """Bring an existing database up to the current schema.
+
+    `create_all` creates missing tables but never alters existing ones, so a
+    new column is invisible to every install that already has data -- which is
+    all of them. Kept deliberately small: add the column, backfill it, move on.
+    """
+    from sqlalchemy import text
+
+    engine = get_engine()
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.execute(text("PRAGMA table_info(players)"))
+        }
+        if not columns or "source" in columns:
+            return
+        connection.execute(
+            text("ALTER TABLE players ADD COLUMN source VARCHAR(20) DEFAULT 'espn'")
+        )
+        connection.execute(text("UPDATE players SET source = 'espn'"))
+        low, high = DEMO_ID_RANGE
+        connection.execute(
+            text(
+                "UPDATE players SET source = 'demo' "
+                "WHERE espn_player_id BETWEEN :low AND :high"
+            ),
+            {"low": low, "high": high},
+        )
 
 
 def reset_engine() -> None:

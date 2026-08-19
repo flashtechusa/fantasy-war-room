@@ -51,7 +51,11 @@ def store_projections(
     Returns a report including what failed to match, because a silent 60% match
     rate looks identical to a working import from the outside.
     """
-    ours = session.scalars(select(Player).where(Player.season == league.season)).all()
+    ours = session.scalars(
+        select(Player).where(
+            Player.season == league.season, Player.source == league.source
+        )
+    ).all()
     matcher = PlayerMatcher(
         [
             Candidate(
@@ -137,7 +141,9 @@ def import_fantasypros(
     report = store_projections(session, league, players, SOURCE_KEY)
 
     pool_size = session.scalar(
-        select(func.count(Player.id)).where(Player.season == league.season)
+        select(func.count(Player.id)).where(
+            Player.season == league.season, Player.source == league.source
+        )
     ) or 0
     coverage = (report["matched"] / pool_size) if pool_size else 0.0
     report["pool_size"] = pool_size

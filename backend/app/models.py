@@ -199,6 +199,17 @@ class Player(Base):
     season: Mapped[int] = mapped_column(Integer, index=True)
     espn_player_id: Mapped[int] = mapped_column(Integer, index=True)
 
+    #: Which provider supplied this player -- "espn" or "demo".
+    #:
+    #: The pool is keyed by (season, espn_player_id) and NOT by league, which is
+    #: deliberate: two real leagues in the same season share one set of players
+    #: and each scores the same raw stats under its own rules. Synthetic demo
+    #: players landed in that same table, so a single demo import put 330 fake
+    #: players into every real league's rankings -- inflating the top of each
+    #: position, moving replacement level, and offering free agents who do not
+    #: exist. Rankings are built per source so that cannot happen.
+    source: Mapped[str] = mapped_column(String(20), default="espn", index=True)
+
     name: Mapped[str] = mapped_column(String(200), index=True)
     position: Mapped[str] = mapped_column(String(10), index=True)  # QB/RB/WR/TE/K/DST
     pro_team: Mapped[str] = mapped_column(String(10), default="FA")

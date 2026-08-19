@@ -159,7 +159,9 @@ def health(
     if league is not None:
         player_count = (
             session.scalar(
-                select(func.count()).select_from(Player).where(Player.season == league.season)
+                select(func.count())
+                .select_from(Player)
+                .where(Player.season == league.season, Player.source == league.source)
             )
             or 0
         )

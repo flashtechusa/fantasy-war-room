@@ -260,7 +260,9 @@ def run_import(
     from sqlalchemy import func, select as sa_select
 
     player_count = session.scalar(
-        sa_select(func.count()).select_from(Player).where(Player.season == league.season)
+        sa_select(func.count())
+        .select_from(Player)
+        .where(Player.season == league.season, Player.source == league.source)
     )
     return {
         "imported": True,

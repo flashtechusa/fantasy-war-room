@@ -341,6 +341,7 @@ def import_players(
                 espn_player_id=record.espn_player_id,
                 name=record.name,
                 position=record.position,
+                source=source_key,
             )
             session.add(player)
             existing[record.espn_player_id] = player
@@ -362,6 +363,7 @@ def import_players(
         player.rookie = record.rookie
         player.availability = record.availability or player.availability
         player.on_team_id = record.on_team_id
+        player.source = source_key
         player.updated_at = now
 
         if player.id is None:
@@ -456,6 +458,7 @@ def import_free_agents(
                 espn_player_id=record.espn_player_id,
                 name=record.name,
                 position=record.position,
+                source=source_key,
             )
             session.add(player)
             existing[record.espn_player_id] = player
@@ -471,6 +474,7 @@ def import_free_agents(
         player.percent_owned = record.percent_owned
         player.percent_started = record.percent_started
         player.availability = record.availability or "FREEAGENT"
+        player.source = source_key
         player.on_team_id = record.on_team_id
         player.updated_at = now
 
