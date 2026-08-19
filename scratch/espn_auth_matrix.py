@@ -183,9 +183,14 @@ def classify_league(payload: object) -> tuple[str, str]:
     settings = payload.get("settings") or {}
     name = settings.get("name")
     teams = payload.get("teams") or []
+    # Teams are the private, account-gated payload. Settings alone is the public
+    # shell ESPN hands anyone, so it is NOT proof of authentication -- requiring
+    # teams is what makes the baseline/control gates mean something.
     if name and teams:
         return ("real data", f"league {payload.get('id', '?')}, {len(teams)} teams")
-    if name or teams or payload.get("status"):
+    if name:
+        return ("public shell", "settings only, no teams")
+    if teams or payload.get("status"):
         return ("partial", f"keys: {sorted(payload)[:6]}")
     if payload.get("messages"):
         return ("shell", "messages only")
@@ -288,7 +293,7 @@ def main() -> int:
         say("  guest/login response, copy data.token.access_token.\n")
 
     league_url = LEAGUE_HOST + LEAGUE_PATH.format(season=season, league_id=league_id)
-    league_url += "?view=mSettings"
+    league_url += "?view=mSettings&view=mTeam&view=mRoster"
     fan_url = FAN_HOST + FAN_PATH.format(swid=urllib.parse.quote(swid, safe=""))
     fan_url += "?context=fantasy"
 
@@ -300,7 +305,7 @@ def main() -> int:
     )
     fan_results = run_matrix(fan_url, "fan", classify_fan, token, swid, espn_s2, delay)
 
-    say(f"## `lm-api-reads` league endpoint\n\n`{LEAGUE_PATH.format(season=season, league_id='{LEAGUE_ID}')}?view=mSettings`\n")
+    say(f"## `lm-api-reads` league endpoint\n\n`{LEAGUE_PATH.format(season=season, league_id='{LEAGUE_ID}')}?view=mSettings&view=mTeam&view=mRoster`\n")
     say(table(league_results))
     say("")
     say("## `fan.api.espn.com` profile endpoint\n\n`/apis/v2/fans/{SWID}?context=fantasy`\n")
@@ -322,8 +327,9 @@ def main() -> int:
         )
     if control is not None and control.status == 200 and control.body_kind == "real data":
         problems.append(
-            "CONTROL FAILED (no-auth returned real data). That league is PUBLIC, so it "
-            "cannot test authentication. Re-run against a private league."
+            "CONTROL PASSED WITHOUT AUTH (no-auth returned your teams). Either the "
+            "league is public or these views are not account-gated, so it cannot test "
+            "bearer auth. Re-run against a league you know is private."
         )
 
     say("## Verdict\n")

@@ -116,14 +116,22 @@
     return null;
   }
 
-  var tokenHits = findToken();
+  // ESPN's web storage is full of tokens that are NOT a user access token:
+  // a BAM device grant authenticates the device, a consent token is
+  // cookie-consent. Both decode as JWT-shaped and would send the bearer rows
+  // to test the wrong credential, so they are named and skipped.
+  var JUNK_TOKEN = /consent|device.?grant|device.?id|_bam_sdk|analytics|telemetry/i;
+  var allHits = findToken();
+  var tokenHits = allHits.filter(function (h) { return !JUNK_TOKEN.test(h.key); });
+  var skipped = allHits.filter(function (h) { return JUNK_TOKEN.test(h.key); })
+    .map(function (h) { return h.key; });
   var token = tokenHits.length ? tokenHits[0].token : null;
 
   // ---- the matrix -------------------------------------------------------
   var leagueUrl =
     READ_HOST +
     '/apis/v3/games/ffl/seasons/' + season +
-    '/segments/0/leagues/' + leagueId + '?view=mSettings';
+    '/segments/0/leagues/' + leagueId + '?view=mSettings&view=mTeam&view=mRoster';
 
   var modes = [
     { label: 'Cookie only (baseline)', creds: 'include', auth: null },
@@ -137,10 +145,16 @@
   function classify(body) {
     if (!body || typeof body !== 'object') return 'not JSON';
     var s = body.settings || {};
-    if (s.name && (body.teams || []).length) return 'REAL DATA';
+    var teams = (body && body.teams) || [];
+    // Teams + a member list is private, account-gated data. A response that
+    // carries only settings is the public shell ESPN hands anyone, so it is
+    // NOT proof of authentication -- which is the whole point being tested.
+    if (teams.length && s.name) return 'REAL DATA (' + teams.length + ' teams)';
+    if (s.name) return 'settings only (public shell)';
     if (s.name || body.status) return 'partial';
     return 'shell';
   }
+  function hasTeams(note) { return note.indexOf('REAL DATA') === 0; }
 
   function probe(mode) {
     if (mode.auth !== null && !token) {
@@ -182,17 +196,30 @@
       return r.status !== 'BLOCKED' && r.status !== 'skipped';
     });
     var passing = conclusive.filter(function (r) {
-      return r.status === 200 && r.note === 'REAL DATA';
+      return r.status === 200 && hasTeams(r.note);
     });
 
     var verdict;
-    if (baseline.status !== 200 || baseline.note !== 'REAL DATA') {
-      verdict = 'INVALID — baseline failed. Are you signed in to ESPN and on your league page?';
-    } else if (control.status === 200 && control.note === 'REAL DATA') {
-      verdict = 'INVALID — this league is PUBLIC, so it cannot test authentication.';
+    var baseHasData = baseline.status === 200 && hasTeams(baseline.note);
+    var controlHasData = control.status === 200 && hasTeams(control.note);
+    if (!baseHasData) {
+      verdict = 'INVALID — the signed-in request did not return your teams (' +
+        baseline.status + ', ' + baseline.note + '). Sign in to ESPN and open ' +
+        'your league page, then re-run.';
+    } else if (controlHasData) {
+      verdict = 'This league is READABLE WITHOUT AUTH — the no-auth request ' +
+        'returned your teams too. Either the league is public, or these views ' +
+        'are not account-gated, so this league cannot test bearer auth. Try a ' +
+        'league you know is private.';
     } else if (!token) {
-      verdict = 'NO TOKEN found in page storage — the bearer rows could not be tested. ' +
-        'That itself suggests the web client does not keep a bearer token client-side.';
+      verdict = (skipped.length
+        ? 'NO USABLE TOKEN — only non-auth tokens were in storage (' +
+          skipped.join(', ') + '). '
+        : 'NO TOKEN found in page storage. ') +
+        'The bearer rows could not be tested from the browser, which itself ' +
+        'suggests the web client does not keep a OneID user token where script ' +
+        'can read it. Use the desktop Python script with a token from the ' +
+        'registerdisney login response to settle the bearer question.';
     } else if (!conclusive.length) {
       verdict = 'INCONCLUSIVE — every bearer row was blocked by CORS before ESPN saw it. ' +
         'Needs the Python script from a desktop.';
@@ -210,7 +237,7 @@
       'border-radius:6px;padding:6px 12px;font-size:14px">Close</button></div>' +
       '<div style="color:#9aa;margin:6px 0 10px">league ' + leagueId +
       ' · ' + season + ' · token ' +
-      (token ? 'found in ' + tokenHits[0].store + ' (' + tokenHits[0].key + ')' : 'not found') +
+      (token ? 'found in ' + tokenHits[0].store + ' (' + tokenHits[0].key + ')' : (skipped.length ? 'only non-auth tokens (' + skipped.join(', ') + ')' : 'not found')) +
       '</div><table style="width:100%;border-collapse:collapse;font-size:12px">' +
       '<tr style="color:#9aa"><th align="left">Mode</th><th align="left">Status</th>' +
       '<th align="left">Body</th></tr>';
