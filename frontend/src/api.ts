@@ -268,6 +268,7 @@ export interface LeagueInfo {
 
 export interface HealthInfo {
   status: string
+  build?: { bundle: string; commit: string }
   season: number
   demo_mode: boolean
   espn: {

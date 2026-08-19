@@ -50,6 +50,10 @@ $logDir    = Join-Path $InstallDir 'data'
 $log       = Join-Path $logDir 'auto-update.log'
 $stampFile = Join-Path $logDir 'last-applied-commit.txt'
 $backupDir = Join-Path $InstallDir 'backups'
+# Pinned absolute, for the same reason the service definition pins it: a
+# relative sqlite path resolves against the working directory and silently
+# opens an empty database somewhere else.
+$dbUrl     = "sqlite:///$($InstallDir -replace '\\','/')/data/fantasy_war_room.db"
 
 function Write-Log($Message, $Level = 'INFO') {
     $line = "{0} [{1}] {2}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Level, $Message
@@ -190,19 +194,48 @@ Write-Log "Dependencies installed"
 Start-ScheduledTask -TaskName $TaskName
 
 # ------------------------------------------------------------------ verify --
+# Liveness comes from HTTP. Whether a league is loaded does NOT: /api/health is
+# deliberately anonymous-safe, and an anonymous caller is nobody, so it reports
+# no league however healthy the install is. Reading league_imported from an
+# unauthenticated request made every successful update look like a failure --
+# and this script rolls back on failure, so it spent days downloading each new
+# version, installing it, declaring it broken and restoring the old one. The
+# rollback only restores backend\, which is why the scripts on disk could be
+# newer than the app serving requests.
 $healthy = $false
-$leagueLoaded = $false
 foreach ($attempt in 1..20) {
     Start-Sleep -Seconds 3
     try {
         $response = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 5
-        if ($response.StatusCode -eq 200) {
-            $healthy = $true
-            $body = $response.Content | ConvertFrom-Json
-            $leagueLoaded = [bool]$body.league_imported
-            break
-        }
+        if ($response.StatusCode -eq 200) { $healthy = $true; break }
     } catch { }
+}
+
+# Ask the database directly, the way update.ps1 does. This still catches the
+# failure it was written for -- a healthy app pointed at an empty database.
+$leagueLoaded = $false
+if ($healthy) {
+    try {
+        $probe = "import sys; sys.path.insert(0, r'$InstallDir\backend'); " +
+                 "from app.db import get_session_factory, init_db; " +
+                 "from app.models import League; init_db(); " +
+                 "print('COUNT:' + str(len(get_session_factory()().query(League).all())))"
+        $env:FWR_DATABASE_URL = $dbUrl
+        $found = & $python -c $probe 2>$null | Select-String '^COUNT:'
+        if ($found) {
+            $count = [int]($found.Line -replace '^COUNT:', '')
+            $leagueLoaded = $count -gt 0
+            Write-Log "Database holds $count league(s)."
+        } else {
+            # Could not ask. Not evidence of failure -- do not roll back a
+            # working install because a probe would not run.
+            Write-Log "Could not query the database; assuming the update is fine." 'WARN'
+            $leagueLoaded = $true
+        }
+    } catch {
+        Write-Log "Database probe failed ($($_.Exception.Message)); assuming fine." 'WARN'
+        $leagueLoaded = $true
+    }
 }
 
 if ($healthy -and $leagueLoaded) {

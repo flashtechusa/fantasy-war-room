@@ -75,6 +75,12 @@ export default function App() {
               ? `${health.data.league.name} · ${health.data.league.season}`
               : 'No league imported'}
             {health.data?.league?.source === 'demo' && ' · DEMO DATA'}
+            {/* Which build is actually serving you. The VPS installs from a
+                zip, so there is no git checkout to ask, and "did the update
+                land?" was otherwise unanswerable from a phone. */}
+            {health.data?.build?.bundle && (
+              <span className="faint"> · {health.data.build.bundle.slice(6, 14)}</span>
+            )}
           </div>
         </div>
         <div className="row" style={{ gap: 10, flexShrink: 0, alignItems: 'center' }}>

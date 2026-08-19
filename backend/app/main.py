@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -148,6 +149,37 @@ app.include_router(routes_team.router)
 app.include_router(routes_sim.router)
 
 
+def _build_fingerprint() -> dict:
+    """What is actually deployed, readable without a terminal.
+
+    The VPS installs from a zip, so there is no git checkout to interrogate and
+    /api/system/version cannot answer. The built bundle's content hash is a
+    perfect deployment fingerprint and is already sitting in index.html, and the
+    auto-updater writes the commit it applied next to the database.
+    """
+    root = Path(__file__).resolve().parent
+    bundle = ""
+    try:
+        index = (root / "static" / "index.html").read_text(encoding="utf-8")
+        match = re.search(r"index-[A-Za-z0-9_-]+\.js", index)
+        bundle = match.group(0) if match else ""
+    except OSError:
+        pass
+
+    commit = ""
+    try:
+        settings = get_settings()
+        path = settings.sqlite_path()
+        if path is not None:
+            stamp = path.parent / "last-applied-commit.txt"
+            if stamp.exists():
+                commit = stamp.read_text(encoding="utf-8").strip()[:8]
+    except Exception:      # noqa: BLE001 - a version string is never worth a 500
+        pass
+
+    return {"bundle": bundle, "commit": commit}
+
+
 @app.get("/api/health", tags=["system"])
 def health(
     session: Session = Depends(get_db),
@@ -168,6 +200,7 @@ def health(
 
     return {
         "status": "ok",
+        "build": _build_fingerprint(),
         "season": settings.espn_season,
         "demo_mode": settings.demo_mode,
         "espn": {
