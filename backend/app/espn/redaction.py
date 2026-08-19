@@ -40,6 +40,11 @@ _SWID_ASSIGNMENT = re.compile(r"(swid)\s*[=:]\s*\"?([^\s;,&\"']+)", re.IGNORECAS
 #: reached a message without its name attached.
 _LOOSE_S2 = re.compile(r"\b[A-Za-z0-9%+/=_-]{120,}\b")
 
+#: An email address. Used by the OTP connect flow, where the address is the one
+#: piece of PII in play; scrubbing it here means a flow error can never carry it
+#: into a log or an API response.
+_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+
 #: Header names whose values are never safe to render.
 SENSITIVE_HEADERS = {"cookie", "set-cookie", "authorization", "x-espn-swid", "proxy-authorization"}
 
@@ -56,6 +61,7 @@ def redact(value: object) -> str:
     text = _SWID_ASSIGNMENT.sub(lambda m: f"{m.group(1)}={SWID_PLACEHOLDER}", text)
     text = _SWID_GUID.sub(SWID_PLACEHOLDER, text)
     text = _LOOSE_S2.sub(S2_PLACEHOLDER, text)
+    text = _EMAIL.sub("[email-REDACTED]", text)
     return text
 
 

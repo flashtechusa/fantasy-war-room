@@ -21,6 +21,7 @@ from ..espn.redaction import redact
 from ..models import League, Player, User
 from ..services import board as board_service
 from ..services import espn_connect
+from ..services import espn_otp
 from ..services import runtime_config
 from ..services.importer import import_league
 from ..services.provider import build_provider
@@ -103,6 +104,29 @@ class ExtensionPayload(CredentialPayload):
     model_config = {"extra": "forbid"}
 
 
+class OtpStartPayload(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+
+    model_config = {"extra": "forbid"}
+
+    @field_validator("email")
+    @classmethod
+    def _looks_like_email(cls, value: str) -> str:
+        value = (value or "").strip()
+        if not espn_otp.looks_like_email(value):
+            raise ValueError("That does not look like an email address.")
+        return value
+
+
+class OtpVerifyPayload(BaseModel):
+    flow_id: str = Field(min_length=8, max_length=64)
+    # Numeric only, 4-8 digits: refuse a malformed code at the boundary rather
+    # than spending a Disney round trip on it.
+    code: str = Field(min_length=4, max_length=8, pattern=r"^\d{4,8}$")
+
+    model_config = {"extra": "forbid"}
+
+
 class SelectLeaguePayload(BaseModel):
     league_id: int = Field(ge=1)
     season: int = Field(ge=2000, le=2100)
@@ -122,9 +146,16 @@ def connection_status(
     user: User = Depends(require_user),
     settings: Settings = Depends(settings_dep),
 ) -> dict:
-    """Where this account is in the connection flow. No secrets."""
+    """Where this account is in the connection flow. No secrets.
+
+    Reports which acquisition methods are available so the UI can order them
+    without hard-coding. `otp_available` follows the OTP kill switch
+    (`FWR_ESPN_OTP_ENABLED`), which is on by default.
+    """
     state = espn_connect.status(session, user, settings)
     state["manual_entry_available"] = True
+    state["otp_available"] = espn_otp.otp_enabled()
+    state["public_link_available"] = True
     return state
 
 
@@ -148,6 +179,49 @@ def submit_credentials(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     board_service.clear_cache()
     return {"stored": True, "status": espn_connect.status(session, user)}
+
+
+# ---------------------------------------------------------------------------
+# ESPN Email Code (OTP) -- the primary connection method
+# ---------------------------------------------------------------------------
+
+
+@router.post("/otp/start", status_code=status.HTTP_201_CREATED)
+def otp_start(
+    payload: OtpStartPayload,
+    session: Session = Depends(get_db),
+    user: User = Depends(require_user),
+) -> dict:
+    """Send an ESPN login code to the user's email.
+
+    Nothing is stored yet: this establishes an in-memory, user-bound flow that
+    expires in ten minutes. The email address is never persisted or logged.
+    """
+    try:
+        flow = espn_otp.start_flow(user, payload.email)
+    except espn_otp.OtpFlowError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    return {"sent": True, **flow.public_state()}
+
+
+@router.post("/otp/verify")
+def otp_verify(
+    payload: OtpVerifyPayload,
+    session: Session = Depends(get_db),
+    user: User = Depends(require_user),
+) -> dict:
+    """Redeem the emailed code, establish the ESPN session, prove it works.
+
+    On success the flow is reduced to `SWID` + `espn_s2`, stored encrypted, and
+    verified against a real private league. The response never contains a
+    credential.
+    """
+    try:
+        result = espn_otp.verify_code(session, user, payload.flow_id, payload.code)
+    except espn_otp.OtpFlowError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    board_service.clear_cache()
+    return result
 
 
 @router.delete("")
@@ -182,8 +256,20 @@ def discover_leagues(
 
     `league_id` lets a manually typed league be confirmed through exactly the
     same path as a discovered one, so the fallback is not a second code path
-    that only gets exercised when discovery is already broken.
+    that only gets exercised when discovery is already broken. It also works
+    with no credentials at all, provided the league is public -- the only route
+    available on a phone, where no browser will hand over an HttpOnly cookie.
     """
+    if not league_id and not espn_connect.has_credentials(session, user):
+        # A precondition this request cannot satisfy, not an ESPN failure --
+        # answering 502 would send the user looking for an outage.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Connect your ESPN account to list your leagues, or enter a "
+                "public league's id directly."
+            ),
+        )
     try:
         result = espn_connect.discover(
             session,

@@ -6,167 +6,52 @@
  * built from YOUR league before you trust a single recommendation.
  */
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
 /**
- * ESPN credentials, editable in the app.
+ * ESPN connection status.
  *
- * Exists so the app can be pointed at a league from a device where you can't
- * edit a `.env` -- a Codespace, a tablet, a phone at the draft. Values are
- * stored locally and the API never returns them; it only reports whether they
- * are set.
+ * Status and a way in, nothing more. This card used to carry its own league
+ * id / SWID / espn_s2 form, which duplicated the Connect ESPN screen field for
+ * field -- two places to enter the same credentials, one of which silently
+ * opened itself on a fresh install. Everything it did now lives in one flow,
+ * including manual league-id entry, so there is a single path to keep working.
  */
-function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
-  // The signed-in user's OWN connection. Never the install-wide one: a new
-  // account must not open this screen and find someone else's league id and
-  // cookies sitting in it.
+function EspnConnectionCard() {
   const config = useAsync(() => api.myConfig(), [])
-  const [open, setOpen] = useState(false)
-  const [leagueId, setLeagueId] = useState('')
-  const [season, setSeason] = useState('')
-  const [swid, setSwid] = useState('')
-  const [s2, setS2] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
-
   const current = config.data
   const configured = Boolean(current?.espn_league_id)
 
-  // Open automatically when there's nothing configured — that's the first thing
-  // a new install needs to do.
-  useEffect(() => {
-    if (current && !current.espn_league_id) setOpen(true)
-  }, [current])
-
-  async function save() {
-    setSaving(true)
-    setResult(null)
-    try {
-      const body: Record<string, unknown> = {}
-      if (leagueId.trim()) body.espn_league_id = Number(leagueId.trim())
-      if (season.trim()) body.espn_season = Number(season.trim())
-      if (swid.trim()) body.espn_swid = swid.trim()
-      if (s2.trim()) body.espn_s2 = s2.trim()
-
-      const response = await api.saveMyConfig(body)
-      setSwid('')
-      setS2('')
-      config.reload()
-
-      if (response.connection?.connected) {
-        setResult({ ok: true, text: `Connected to "${response.connection.league_name}".` })
-        setOpen(false)
-      } else if (response.connection) {
-        setResult({ ok: false, text: response.connection.detail ?? 'Could not reach ESPN.' })
-      } else {
-        setResult({ ok: true, text: 'Saved.' })
-      }
-      onSaved()
-    } catch (error) {
-      setResult({ ok: false, text: (error as Error).message })
-    } finally {
-      setSaving(false)
-    }
-  }
-
   return (
     <Card title="ESPN connection">
-      <div className="row between" style={{ marginBottom: open ? 12 : 0 }}>
+      <div className="row between">
         <div className="small">
           {configured ? (
             <>
               League <strong>{current?.espn_league_id}</strong> · {current?.espn_season}
               <div className="tiny faint">
                 {current?.espn_s2_set
-                  ? 'Private-league cookies stored'
-                  : 'Public league (no cookies)'}
+                  ? 'Private-league cookies stored, encrypted'
+                  : 'Public league (no cookies needed)'}
               </div>
             </>
           ) : (
-            <span className="muted">No league configured yet.</span>
+            <>
+              <span className="muted">No league connected yet.</span>
+              <div className="tiny faint">
+                Connect ESPN finds your leagues and your team for you.
+              </div>
+            </>
           )}
         </div>
-        <div className="row">
-          <Link className="btn primary sm" to="/connect">
-            {configured ? 'Reconnect ESPN' : 'Connect ESPN'}
-          </Link>
-          <button className="btn sm" onClick={() => setOpen((v) => !v)}>
-            {open ? 'Cancel' : 'Enter manually'}
-          </button>
-        </div>
+        <Link className="btn primary sm" to="/connect">
+          {configured ? 'Manage' : 'Connect ESPN'}
+        </Link>
       </div>
-
-      {/* Manual entry stays, deliberately. The guided flow needs ESPN's account
-          endpoint to answer; this one needs nothing but a league id, so it is
-          the path that still works when that assumption fails. */}
-
-      {open && (
-        <>
-          <label className="tiny faint">LEAGUE ID</label>
-          <input
-            type="number"
-            inputMode="numeric"
-            placeholder={String(current?.espn_league_id ?? '123456')}
-            value={leagueId}
-            onChange={(e) => setLeagueId(e.target.value)}
-            style={{ marginBottom: 8 }}
-          />
-          <label className="tiny faint">SEASON</label>
-          <input
-            type="number"
-            inputMode="numeric"
-            placeholder={String(current?.espn_season ?? 2026)}
-            value={season}
-            onChange={(e) => setSeason(e.target.value)}
-            style={{ marginBottom: 8 }}
-          />
-          <label className="tiny faint">
-            SWID {current?.swid_set && <span className="muted">(stored — leave blank to keep)</span>}
-          </label>
-          <input
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="{XXXXXXXX-XXXX-...}"
-            value={swid}
-            onChange={(e) => setSwid(e.target.value)}
-            style={{ marginBottom: 8 }}
-          />
-          <label className="tiny faint">
-            ESPN_S2{' '}
-            {current?.espn_s2_set && <span className="muted">(stored — leave blank to keep)</span>}
-          </label>
-          <input
-            type="text"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="AEC..."
-            value={s2}
-            onChange={(e) => setS2(e.target.value)}
-            style={{ marginBottom: 10 }}
-          />
-          <button className="btn primary block" onClick={save} disabled={saving}>
-            {saving ? 'Testing connection…' : 'Save & test connection'}
-          </button>
-          <div className="tiny faint" style={{ marginTop: 8 }}>
-            Your cookies are encrypted before they are stored and are never sent back to
-            the browser. This connection is yours alone — nobody else with an account can
-            see it. Public leagues need only the league id. Prefer{' '}
-            <Link to="/connect">Connect ESPN</Link> — it finds your leagues and your team
-            for you.
-          </div>
-        </>
-      )}
-
-      {result && (
-        <div style={{ marginTop: 10 }}>
-          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
-        </div>
-      )}
     </Card>
   )
 }
@@ -632,13 +517,7 @@ export default function LeagueSettings({
 
       {isOwner && <FantasyProsCard onImported={() => onChange?.()} />}
 
-      <EspnConnectionForm
-        onSaved={() => {
-          health.reload()
-          league.reload()
-          onChange?.()
-        }}
-      />
+      <EspnConnectionCard />
 
       <UpdateCard />
 

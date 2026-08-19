@@ -166,6 +166,10 @@ def status(session: Session, user: User, settings: Settings | None = None) -> di
         "espn_league_id": config.espn_league_id if config else None,
         "espn_season": (config.espn_season if config else None) or resolved.espn_season,
         "my_team_id": config.my_team_id if config else None,
+        # Whether the selected team was proven to belong to this account's SWID.
+        # A public/self-asserted selection reports False and must be shown as
+        # unverified, never used as proof of ownership.
+        "verified": bool(config.verified) if config else False,
         "updated_at": config.updated_at if config else None,
         "can_discover": bool(
             config and config.espn_swid_encrypted and config.espn_s2_encrypted
@@ -193,13 +197,26 @@ class DiscoveryResult:
         }
 
 
-def http_client_for(session: Session, user: User) -> EspnHttpClient:
+def http_client_for(
+    session: Session, user: User, require_credentials: bool = True
+) -> EspnHttpClient:
+    """An ESPN handle for this user, with or without their cookies.
+
+    `require_credentials=False` returns an anonymous client when none are
+    stored. That is not a degraded mode -- a *public* league answers ESPN's v3
+    endpoint with no cookies at all, which is the only route that works on a
+    phone, where no browser will surrender an HttpOnly cookie. Discovery still
+    needs credentials (it is an account-level lookup), so an anonymous client
+    can read a league but never find one.
+    """
     swid, espn_s2 = credentials(session, user)
-    if not swid or not espn_s2:
+    if swid and espn_s2:
+        return EspnHttpClient(swid=swid, espn_s2=espn_s2)
+    if require_credentials:
         raise EspnConnectError(
             "No ESPN credentials stored for this account. Connect ESPN first."
         )
-    return EspnHttpClient(swid=swid, espn_s2=espn_s2)
+    return EspnHttpClient()
 
 
 def discover(
@@ -210,11 +227,21 @@ def discover(
     client: EspnHttpClient | None = None,
     settings: Settings | None = None,
 ) -> DiscoveryResult:
-    """Every ESPN football league these cookies can reach, for one season."""
+    """Every ESPN football league reachable for one season.
+
+    With credentials stored, that means every league on the account. Without
+    them it means whichever league ids the caller names, and only if they are
+    public -- which is the whole path for someone on a phone.
+    """
     settings = settings or get_settings()
     season = int(season or runtime_config.settings_for_user(session, user, settings).espn_season)
     owned = client is None
-    client = client or http_client_for(session, user)
+    # Naming a league id is a request to look that one up, so credentials are
+    # not required for it. Asking "what leagues do I have?" genuinely is.
+    client = client or http_client_for(
+        session, user, require_credentials=not extra_league_ids
+    )
+    anonymous = not client.has_credentials
     try:
         leagues, warnings = discovery.discover_leagues(
             client, season=season, extra_league_ids=extra_league_ids
@@ -225,7 +252,14 @@ def discover(
         if owned:
             client.close()
 
-    if not leagues and not warnings:
+    if anonymous:
+        # The fan-profile failure is expected here and its message ("a SWID is
+        # required") would read as a bug rather than as the intended path.
+        warnings = [
+            "Checked without ESPN cookies, so only public leagues are visible. "
+            "Connect your ESPN account from a desktop browser to see private ones."
+        ]
+    elif not leagues and not warnings:
         warnings.append(
             f"ESPN reported no fantasy football leagues for {season} on this account. "
             "If you know the league id you can still enter it by hand."
@@ -240,9 +274,13 @@ def preview(
     season: int,
     client: EspnHttpClient | None = None,
 ) -> dict:
-    """One league read in full, for the "verify the rules" step."""
+    """One league read in full, for the "verify the rules" step.
+
+    Works without credentials when the league is public, so the phone path can
+    confirm the rules before importing exactly as the desktop path does.
+    """
     owned = client is None
-    client = client or http_client_for(session, user)
+    client = client or http_client_for(session, user, require_credentials=False)
     try:
         league = discovery.league_preview(client, int(league_id), int(season))
     except EspnHttpError as exc:
@@ -265,14 +303,24 @@ def select_league(
     team_id: int | None = None,
     client: EspnHttpClient | None = None,
 ) -> dict:
-    """Point this account at one league, auto-detecting its team.
+    """Point this account at one league, binding the team to the ESPN account.
 
-    `team_id` is only needed when the SWID does not match any owner -- which
-    happens in leagues where somebody else set the team up. Passing it wins
-    over detection, because an explicit choice always should.
+    Team ownership is an authorisation fact, so the *server* decides it, not the
+    client:
+
+    * **Verified.** When the connection is authenticated (cookies present) and
+      ESPN's owner ids match this account's SWID to a team, that team is
+      assigned automatically. A `team_id` that disagrees is **rejected** -- the
+      frontend cannot make one manager appear to own another's team.
+    * **Unverified.** A public/anonymous connection has no SWID to match, and an
+      authenticated connection whose SWID matches no owner (someone else set the
+      team up) cannot be proven either. There the team is a self-assertion: the
+      submitted `team_id` is accepted but the connection is recorded as
+      unverified, and must be labelled as such wherever it is shown.
     """
     owned = client is None
-    client = client or http_client_for(session, user)
+    client = client or http_client_for(session, user, require_credentials=False)
+    authenticated = client.has_credentials
     try:
         league = discovery.league_preview(client, int(league_id), int(season))
     except EspnHttpError as exc:
@@ -281,13 +329,34 @@ def select_league(
         if owned:
             client.close()
 
-    resolved_team = int(team_id) if team_id is not None else league.my_team_id
-    if resolved_team is not None and not any(
-        t["espn_team_id"] == resolved_team for t in league.teams
-    ):
-        raise EspnConnectError(
-            f"Team {resolved_team} is not in league {league_id} for {season}."
-        )
+    requested_team = int(team_id) if team_id is not None else None
+    #: The team ESPN's own owner ids tie to the reading SWID, if any. Set only
+    #: when the read carried credentials, so it is meaningful only when
+    #: `authenticated` is true.
+    owned_team = league.my_team_id
+
+    if authenticated and owned_team is not None:
+        # ESPN told us which team this account owns. That is authoritative and
+        # cannot be overridden from the client -- rejecting the mismatch is the
+        # whole point of enforcing ownership server-side.
+        if requested_team is not None and requested_team != owned_team:
+            raise EspnConnectError(
+                "This ESPN account owns a different team in this league, so the "
+                "team is assigned automatically and cannot be changed."
+            )
+        resolved_team = owned_team
+        verified = True
+    else:
+        # No SWID match to lean on: the team is a self-assertion. Allowed, but
+        # never treated as proof of ownership.
+        resolved_team = requested_team
+        verified = False
+        if resolved_team is not None and not any(
+            t["espn_team_id"] == resolved_team for t in league.teams
+        ):
+            raise EspnConnectError(
+                f"Team {resolved_team} is not in league {league_id} for {season}."
+            )
 
     config = _config_for(session, user)
     if config is None:
@@ -296,6 +365,7 @@ def select_league(
     config.espn_league_id = int(league_id)
     config.espn_season = int(season)
     config.my_team_id = resolved_team
+    config.verified = verified
     session.flush()
     session.commit()
 
@@ -308,7 +378,8 @@ def select_league(
         "league": league.summary(),
         "rules": discovery.rules_summary(league),
         "my_team_id": resolved_team,
-        "team_auto_detected": team_id is None and league.my_team_id is not None,
+        "verified": verified,
+        "team_auto_detected": authenticated and owned_team is not None,
     }
 
 

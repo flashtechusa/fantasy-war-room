@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -71,22 +71,48 @@ def get_session_factory() -> sessionmaker[Session]:
 #: `source` column.
 DEMO_ID_RANGE = (100000, 100999)
 
+#: Simple columns added to existing tables after their first release. `create_all`
+#: creates missing *tables* but never alters existing ones, so a column added
+#: to a table that already exists in a deployed database has to be filled in by
+#: hand. Each entry is nullable with no default, so the ALTER is portable
+#: across SQLite and Postgres and existing rows simply read as the falsy
+#: default until they are next written. Columns needing a data backfill (see
+#: `_backfill_player_source`) do not belong here.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "user_espn_config": {"verified": "BOOLEAN"},
+}
+
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
-    _add_missing_columns()
-
-
-def _add_missing_columns() -> None:
-    """Bring an existing database up to the current schema.
-
-    `create_all` creates missing tables but never alters existing ones, so a
-    new column is invisible to every install that already has data -- which is
-    all of them. Kept deliberately small: add the column, backfill it, move on.
-    """
-    from sqlalchemy import text
-
     engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _ensure_added_columns(engine)
+    _backfill_player_source(engine)
+
+
+def _ensure_added_columns(engine: Engine) -> None:
+    """Add plain new columns to tables that predate them (no backfill)."""
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    for table, columns in _ADDED_COLUMNS.items():
+        if table not in existing_tables:
+            # create_all just made it with every column present.
+            continue
+        present = {col["name"] for col in inspector.get_columns(table)}
+        for name, ddl_type in columns.items():
+            if name in present:
+                continue
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+
+
+def _backfill_player_source(engine: Engine) -> None:
+    """Add and populate `players.source` on a database that predates it.
+
+    Unlike the plain columns above, this one needs a data backfill: existing
+    rows are marked `espn` except demo players, which are identified by their
+    id band. Kept deliberately small: add the column, backfill it, move on.
+    """
     with engine.begin() as connection:
         columns = {
             row[1]

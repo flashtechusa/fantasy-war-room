@@ -153,11 +153,17 @@ Credentials are encrypted before storage, never logged, never returned by any
 endpoint, and deletable with **Disconnect ESPN**. Each account holds its own, so
 two people on one install never see each other's league.
 
+**On a phone:** connecting a *private* league needs a desktop browser once —
+`espn_s2` is `HttpOnly` and no mobile browser will surrender it, which is a
+browser security boundary rather than something an app can work around. After
+that one connection the phone works for the rest of the season, because the
+credentials live server-side. A *public* league needs no cookies at all and
+connects straight from a phone.
+
 There is also a Manifest V3 [browser extension](browser-extension/README.md)
-that collects the cookies for you: `espn_s2` is `HttpOnly`, so an extension is
-the only thing in a browser permitted to read it — no bookmarklet can, and ours
-says so rather than pretending. Full detail, including what these cookies can
-do and how to revoke them: [docs/espn-connection.md](docs/espn-connection.md).
+for desktop Chrome/Edge that collects the cookies for you. Full detail,
+including what these cookies can do and how to revoke them:
+[docs/espn-connection.md](docs/espn-connection.md).
 
 Manual entry stays available on the League screen and always will — it needs
 nothing but a league id, so it is the path that still works if ESPN's account

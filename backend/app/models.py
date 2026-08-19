@@ -462,6 +462,10 @@ class UserEspnConfig(Base):
 
     my_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     faab_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: True only when ESPN's own owner ids matched the connecting account's
+    #: SWID to this team. A public/self-asserted selection is *not* verified and
+    #: must never be treated as proof that this user manages the team.
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

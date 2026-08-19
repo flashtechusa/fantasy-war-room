@@ -978,3 +978,57 @@ th.num {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- Connect ESPN method picker ---------------------------------------- */
+
+.method-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.method-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.method-tab:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.method-tab.active {
+  border-color: var(--accent);
+  background: rgba(214, 59, 38, 0.1);
+  color: var(--text);
+}
+
+.method-badge {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.linklike {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
