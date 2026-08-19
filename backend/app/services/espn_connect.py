@@ -193,13 +193,26 @@ class DiscoveryResult:
         }
 
 
-def http_client_for(session: Session, user: User) -> EspnHttpClient:
+def http_client_for(
+    session: Session, user: User, require_credentials: bool = True
+) -> EspnHttpClient:
+    """An ESPN handle for this user, with or without their cookies.
+
+    `require_credentials=False` returns an anonymous client when none are
+    stored. That is not a degraded mode -- a *public* league answers ESPN's v3
+    endpoint with no cookies at all, which is the only route that works on a
+    phone, where no browser will surrender an HttpOnly cookie. Discovery still
+    needs credentials (it is an account-level lookup), so an anonymous client
+    can read a league but never find one.
+    """
     swid, espn_s2 = credentials(session, user)
-    if not swid or not espn_s2:
+    if swid and espn_s2:
+        return EspnHttpClient(swid=swid, espn_s2=espn_s2)
+    if require_credentials:
         raise EspnConnectError(
             "No ESPN credentials stored for this account. Connect ESPN first."
         )
-    return EspnHttpClient(swid=swid, espn_s2=espn_s2)
+    return EspnHttpClient()
 
 
 def discover(
@@ -210,11 +223,21 @@ def discover(
     client: EspnHttpClient | None = None,
     settings: Settings | None = None,
 ) -> DiscoveryResult:
-    """Every ESPN football league these cookies can reach, for one season."""
+    """Every ESPN football league reachable for one season.
+
+    With credentials stored, that means every league on the account. Without
+    them it means whichever league ids the caller names, and only if they are
+    public -- which is the whole path for someone on a phone.
+    """
     settings = settings or get_settings()
     season = int(season or runtime_config.settings_for_user(session, user, settings).espn_season)
     owned = client is None
-    client = client or http_client_for(session, user)
+    # Naming a league id is a request to look that one up, so credentials are
+    # not required for it. Asking "what leagues do I have?" genuinely is.
+    client = client or http_client_for(
+        session, user, require_credentials=not extra_league_ids
+    )
+    anonymous = not client.has_credentials
     try:
         leagues, warnings = discovery.discover_leagues(
             client, season=season, extra_league_ids=extra_league_ids
@@ -225,7 +248,14 @@ def discover(
         if owned:
             client.close()
 
-    if not leagues and not warnings:
+    if anonymous:
+        # The fan-profile failure is expected here and its message ("a SWID is
+        # required") would read as a bug rather than as the intended path.
+        warnings = [
+            "Checked without ESPN cookies, so only public leagues are visible. "
+            "Connect your ESPN account from a desktop browser to see private ones."
+        ]
+    elif not leagues and not warnings:
         warnings.append(
             f"ESPN reported no fantasy football leagues for {season} on this account. "
             "If you know the league id you can still enter it by hand."
@@ -240,9 +270,13 @@ def preview(
     season: int,
     client: EspnHttpClient | None = None,
 ) -> dict:
-    """One league read in full, for the "verify the rules" step."""
+    """One league read in full, for the "verify the rules" step.
+
+    Works without credentials when the league is public, so the phone path can
+    confirm the rules before importing exactly as the desktop path does.
+    """
     owned = client is None
-    client = client or http_client_for(session, user)
+    client = client or http_client_for(session, user, require_credentials=False)
     try:
         league = discovery.league_preview(client, int(league_id), int(season))
     except EspnHttpError as exc:
@@ -269,10 +303,12 @@ def select_league(
 
     `team_id` is only needed when the SWID does not match any owner -- which
     happens in leagues where somebody else set the team up. Passing it wins
-    over detection, because an explicit choice always should.
+    over detection, because an explicit choice always should. A public league
+    connected without cookies has no SWID to match, so the team is always
+    chosen by hand there.
     """
     owned = client is None
-    client = client or http_client_for(session, user)
+    client = client or http_client_for(session, user, require_credentials=False)
     try:
         league = discovery.league_preview(client, int(league_id), int(season))
     except EspnHttpError as exc:

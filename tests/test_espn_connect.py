@@ -161,10 +161,11 @@ class TestDiscoveryThroughTheApi:
         assert all("espn_s2=" in header for header in espn_stub.cookie_headers)
         assert all("SWID=" in header for header in espn_stub.cookie_headers)
 
-    def test_discovery_needs_credentials_first(self, client, espn_stub):
+    def test_listing_a_whole_account_needs_credentials_first(self, client, espn_stub):
+        """409, not 502: the request is unsatisfiable, ESPN is not broken."""
         response = client.get("/api/espn/leagues?season=2026")
-        assert response.status_code == 502
-        assert "connect espn" in response.json()["detail"].lower()
+        assert response.status_code == 409
+        assert "connect your espn account" in response.json()["detail"].lower()
 
     def test_a_manual_league_id_is_confirmed_the_same_way(self, client, espn_stub):
         """The fallback runs the same code path, not a second one."""
@@ -299,7 +300,8 @@ class TestDisconnect:
         connect_credentials(client)
         assert client.get("/api/espn/leagues?season=2026").status_code == 200
         client.delete("/api/espn")
-        assert client.get("/api/espn/leagues?season=2026").status_code == 502
+        # 409: there is nothing to list any more, which is a state problem.
+        assert client.get("/api/espn/leagues?season=2026").status_code == 409
 
     def test_disconnecting_twice_is_not_an_error(self, client):
         assert client.delete("/api/espn").status_code == 200
@@ -311,3 +313,76 @@ class TestDisconnect:
         connect_credentials(client)
         client.delete("/api/espn")
         assert client.get("/api/health").json()["league_imported"] is True
+
+
+class TestPublicLeagues:
+    """A public league needs no cookies -- the only path that works on a phone.
+
+    `espn_s2` is HttpOnly and no mobile browser exposes it, so for a phone-only
+    user this is not a convenience, it is the entire route.
+    """
+
+    def test_a_public_league_is_readable_with_no_credentials(self, client, espn_stub):
+        espn_stub.leagues = {555: league_payload(555, "Open League", my_team=None)}
+        body = client.get("/api/espn/leagues?season=2026&league_id=555").json()
+        assert body["count"] == 1
+        assert body["leagues"][0]["name"] == "Open League"
+
+    def test_no_cookies_are_sent_when_none_are_stored(self, client, espn_stub):
+        espn_stub.leagues = {555: league_payload(555, "Open League")}
+        client.get("/api/espn/leagues?season=2026&league_id=555")
+        assert all(header == "" for header in espn_stub.cookie_headers)
+
+    def test_the_warning_explains_what_was_not_checked(self, client, espn_stub):
+        espn_stub.leagues = {555: league_payload(555, "Open League")}
+        body = client.get("/api/espn/leagues?season=2026&league_id=555").json()
+        assert any("only public leagues" in w for w in body["warnings"])
+        # The fan-profile failure is the expected path here, not a bug to report.
+        assert not any("SWID is required" in w for w in body["warnings"])
+
+    def test_a_private_league_comes_back_empty_rather_than_erroring(
+        self, client, espn_stub
+    ):
+        """ESPN answers 401 without cookies. The UI needs an empty list, not a 502."""
+        espn_stub.leagues = {}  # every lookup 404s/401s
+        body = client.get("/api/espn/leagues?season=2026&league_id=555").json()
+        assert body["count"] == 0
+
+    def test_a_public_league_can_be_previewed_and_selected(self, client, espn_stub):
+        espn_stub.leagues = {555: league_payload(555, "Open League", my_team=None)}
+
+        preview = client.get("/api/espn/leagues/555?season=2026").json()
+        assert preview["rules"]["roster_slots"]["RB"] == 2
+
+        selected = client.post(
+            "/api/espn/select", json={"league_id": 555, "season": 2026, "team_id": 4}
+        ).json()
+        assert selected["selected"] is True
+        assert selected["my_team_id"] == 4
+        # Nothing to auto-detect without a SWID, so the team is a manual choice.
+        assert selected["team_auto_detected"] is False
+
+    def test_selecting_a_public_league_stores_no_credentials(self, client, espn_stub):
+        espn_stub.leagues = {555: league_payload(555, "Open League")}
+        client.post("/api/espn/select", json={"league_id": 555, "season": 2026, "team_id": 1})
+        state = client.get("/api/espn/status").json()
+        assert state["espn_league_id"] == 555
+        assert state["credentials_stored"] is False
+
+    def test_listing_leagues_without_a_league_id_or_cookies_is_a_409(
+        self, client, espn_stub
+    ):
+        """A precondition the request can't meet -- not an ESPN outage."""
+        response = client.get("/api/espn/leagues?season=2026")
+        assert response.status_code == 409
+        assert "public league" in response.json()["detail"].lower()
+
+    def test_stored_credentials_are_still_used_when_a_league_id_is_given(
+        self, client, espn_stub
+    ):
+        espn_stub.leagues = {555: league_payload(555, "Private League", my_team=2)}
+        connect_credentials(client)
+        body = client.get("/api/espn/leagues?season=2026&league_id=555").json()
+        assert all("espn_s2=" in header for header in espn_stub.cookie_headers)
+        # And with a SWID present, the team is detected rather than asked for.
+        assert body["leagues"][0]["my_team_id"] == 2

@@ -182,8 +182,20 @@ def discover_leagues(
 
     `league_id` lets a manually typed league be confirmed through exactly the
     same path as a discovered one, so the fallback is not a second code path
-    that only gets exercised when discovery is already broken.
+    that only gets exercised when discovery is already broken. It also works
+    with no credentials at all, provided the league is public -- the only route
+    available on a phone, where no browser will hand over an HttpOnly cookie.
     """
+    if not league_id and not espn_connect.has_credentials(session, user):
+        # A precondition this request cannot satisfy, not an ESPN failure --
+        # answering 502 would send the user looking for an outage.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Connect your ESPN account to list your leagues, or enter a "
+                "public league's id directly."
+            ),
+        )
     try:
         result = espn_connect.discover(
             session,

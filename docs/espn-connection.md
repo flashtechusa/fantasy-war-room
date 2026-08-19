@@ -7,7 +7,10 @@ can do, and how to take them back.
 
 ## The flow
 
-1. **Connect your ESPN account** — hand over the two cookies once.
+**Private league** (the common case — ESPN defaults to private):
+
+1. **Connect your ESPN account** — hand over the two cookies once, from a
+   desktop browser. See the reality check below for why a phone cannot.
 2. **Auto-discover leagues** — we ask ESPN what those cookies can reach.
 3. **Which league?** — tap one. No league id typed.
 4. **Your team** — detected from the cookie; correct it if we got it wrong.
@@ -15,9 +18,16 @@ can do, and how to take them back.
    shown before anything is imported.
 6. **Import.**
 
-Manual entry (league id + season, typed) stays available on the League screen
-and goes through the same confirmation and import path. Nothing about the
-assistant removes it.
+Steps 2–6 work on any device. Only step 1 needs a desktop, once, because the
+credentials are then held server-side.
+
+**Public league:** skip step 1 entirely. Enter a league id, confirm the rules,
+import. Works on a phone.
+
+There is one place to do all of this — `Connect ESPN`. The League screen shows
+connection status and links here; it used to carry a second, identical
+credential form, which was removed because two ways to enter the same cookies is
+one too many.
 
 ### What is discovered automatically
 
@@ -77,7 +87,34 @@ Consequences, stated plainly:
 Verify it yourself: DevTools → Application → Cookies → `espn.com`, and look at
 the `HttpOnly` column.
 
-### Option A — Browser extension ✅ implemented
+### Reality check: none of this works on a phone
+
+Worth stating plainly, because it shapes every option below. On a phone there is
+**no** way to obtain `espn_s2` — not just no *convenient* way:
+
+- No mobile browser has DevTools, so the manual copy path is desktop-only too.
+- Chrome on Android has no extensions; iOS Chrome and Firefox are Safari shells.
+- iOS Safari Web Extensions **cannot** read HttpOnly cookies. Apple states this
+  directly ([Developer Forums](https://developer.apple.com/forums/thread/657931)),
+  and MDN corroborates it.
+- Bookmarklets run on mobile but still cannot see an HttpOnly cookie.
+
+The one exception: **Firefox for Android** (120+, Dec 2023) installs arbitrary
+extensions from AMO, and Gecko's `browser.cookies` *does* read HttpOnly cookies.
+So a published Firefox-Android extension is a genuine phone-native path. We have
+not built one — it requires the user to switch browsers, which is a bigger ask
+than connecting once on a laptop — but it exists, and it is the only non-native
+mobile option that does.
+
+This is not a gap in our thinking. FantasyPros — far better resourced — also
+requires a desktop Chrome extension, and their live ESPN draft sync is
+desktop-Chrome only, not available even inside their own native app.
+
+**So: connecting a private league needs a desktop once.** Credentials are stored
+server-side, so the phone works for the rest of the season afterwards. A public
+league needs no cookies at all and connects from a phone directly.
+
+### Option A — Browser extension ✅ implemented (desktop only)
 
 `browser-extension/` (Manifest V3). It is the only approach that actually
 removes the manual step, because `chrome.cookies` is the only interface that
@@ -130,7 +167,19 @@ Should this ever be revisited, the bar is: read-only, single-cookie, explicit
 per-run consent, no network access except to `localhost`, and source that fits
 on one screen.
 
-### Option D — Manual paste (always available)
+### Option D — Public league (no cookies at all)
+
+A public ESPN league answers the v3 endpoint with no credentials, so **Connect
+ESPN → Public league** takes a league id and nothing else. This is the only
+route that works entirely on a phone.
+
+Limits: ESPN leagues default to Private, and only the commissioner can change
+that — league-wide, exposing League Office, Standings, Box Scores and Team Pages
+to anyone with the URL. It is reversible at any time. We do not suggest flipping
+a private league public just to import it; the option exists for leagues that
+already are.
+
+### Option E — Manual paste (always available)
 
 DevTools → Application → Cookies → `espn.com` → copy `SWID` and `espn_s2` into
 the League screen. Works everywhere, needs nothing installed.

@@ -10,7 +10,7 @@
  * because no endpoint returns one.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   api,
@@ -22,6 +22,19 @@ import { Banner, Card, Loading } from '../components'
 import { useAsync } from '../useAsync'
 
 type Step = 'credentials' | 'pick-league' | 'confirm' | 'done'
+
+/**
+ * Whether this is a phone or tablet.
+ *
+ * Used only to change what we *say*, never what we allow -- a desktop user who
+ * trips this still gets every option. The point is that a phone user should be
+ * told up front that a private league needs a laptop once, rather than
+ * discovering it after hunting for DevTools that do not exist on iOS.
+ */
+function isMobileBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent)
+}
 
 function currentSeason(): number {
   // ESPN's season flips over in the spring; before that, last year's league is
@@ -147,16 +160,31 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
   const [autoDetected, setAutoDetected] = useState(false)
   const [pairing, setPairing] = useState<PairingCode | null>(null)
   const [showExtension, setShowExtension] = useState(false)
+  //: private = cookies (desktop once); public = league id only (works anywhere).
+  const [mode, setMode] = useState<'private' | 'public'>('private')
+  const [autoAdvanced, setAutoAdvanced] = useState(false)
+  const isMobile = useMemo(isMobileBrowser, [])
 
   // Credentials already stored (from a previous visit, or the extension) means
-  // there is nothing to type -- go straight to finding leagues.
+  // there is nothing to type -- go straight to finding leagues. Only once,
+  // though: a user who deliberately came back to re-enter expired cookies must
+  // not be bounced straight out of the form again.
   useEffect(() => {
-    if (status.data?.credentials_stored && step === 'credentials') {
+    if (status.data?.credentials_stored && step === 'credentials' && !autoAdvanced) {
+      setAutoAdvanced(true)
       setStep('pick-league')
       setNotice('ESPN credentials are already stored for this account.')
     }
     if (status.data?.espn_season) setSeason(String(status.data.espn_season))
   }, [status.data])
+
+  function reenterCredentials() {
+    setAutoAdvanced(true)
+    setMode('private')
+    setError('')
+    setNotice('Enter the current cookies from a desktop browser.')
+    setStep('credentials')
+  }
 
   async function run<T>(work: () => Promise<T>): Promise<T | null> {
     setBusy(true)
@@ -186,6 +214,27 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
     status.reload()
     setStep('pick-league')
     await discover()
+  }
+
+  async function connectPublicLeague() {
+    // Nothing is stored on the way in. A public league is readable with no
+    // credentials at all, so this asks ESPN directly and only persists a choice
+    // once the user confirms the rules, exactly like the private path.
+    const id = Number(manualLeagueId.trim())
+    if (!id) return
+    const result = await run(() => api.discoverEspnLeagues(Number(season) || undefined, id))
+    if (!result) return
+    if (result.leagues.length === 0) {
+      setError(
+        `ESPN did not return league ${id} without credentials. It is probably ` +
+          'private — connect your ESPN account from a desktop browser instead.',
+      )
+      return
+    }
+    setLeagues(result.leagues)
+    setWarnings([])
+    setStep('pick-league')
+    await choose(result.leagues[0])
   }
 
   async function discover() {
@@ -272,102 +321,197 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
           ))}
         </ol>
 
-        {error && <Banner kind="error">{error}</Banner>}
+        {error && (
+          <Banner kind="error">
+            {error}
+            {status.data?.credentials_stored && step !== 'credentials' && (
+              <div style={{ marginTop: 8 }}>
+                <button className="btn sm" onClick={reenterCredentials}>
+                  Re-enter ESPN cookies
+                </button>
+                <div className="tiny faint" style={{ marginTop: 4 }}>
+                  ESPN cookies expire when you sign out of ESPN, and eventually
+                  on their own. Re-copying them fixes it.
+                </div>
+              </div>
+            )}
+          </Banner>
+        )}
         {notice && !error && <Banner kind="info">{notice}</Banner>}
 
         {step === 'credentials' && (
           <div className="connect-panel">
-            <p className="small">
-              ESPN has no API key — your league is reached with the same two
-              session cookies your browser already holds. They are encrypted
-              before storage, never logged, and never returned by this app.
-              They are session credentials, though: anyone holding both can act
-              as you on ESPN, which is why <strong>Disconnect ESPN</strong> below
-              deletes them outright, and why signing out of ESPN kills them at
-              source. Full detail in <code>docs/espn-connection.md</code>.
-            </p>
+            {isMobile && mode === 'private' && (
+              <Banner kind="warn">
+                <strong>Private leagues need a desktop browser once.</strong> ESPN
+                protects the cookie we need with HttpOnly, and no phone browser
+                will hand it over — not Safari, not Chrome, not a bookmarklet.
+                Connect once on a laptop and this phone works for the rest of the
+                season. A <em>public</em> league needs nothing but its id and
+                works right here.
+              </Banner>
+            )}
 
-            <label htmlFor="connect-swid">SWID cookie</label>
-            <input
-              id="connect-swid"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={swid}
-              onChange={(event) => setSwid(event.target.value)}
-              placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
-            />
-
-            <label htmlFor="connect-s2">espn_s2 cookie</label>
-            <input
-              id="connect-s2"
-              type="password"
-              autoComplete="off"
-              spellCheck={false}
-              value={s2}
-              onChange={(event) => setS2(event.target.value)}
-              placeholder="AEB..."
-            />
-
-            <label htmlFor="connect-season">Season</label>
-            <input
-              id="connect-season"
-              type="number"
-              value={season}
-              onChange={(event) => setSeason(event.target.value)}
-            />
-
-            <div className="row wrap">
+            <div className="row wrap" role="tablist" aria-label="League type">
               <button
-                className="btn primary"
-                disabled={busy || !swid.trim() || !s2.trim()}
-                onClick={saveCredentials}
+                role="tab"
+                aria-selected={mode === 'private'}
+                className={`btn sm${mode === 'private' ? ' primary' : ''}`}
+                onClick={() => setMode('private')}
               >
-                {busy ? 'Connecting…' : 'Connect ESPN account'}
+                Private league
               </button>
-              <button className="btn sm" onClick={() => setShowExtension((v) => !v)}>
-                Use the browser extension instead
+              <button
+                role="tab"
+                aria-selected={mode === 'public'}
+                className={`btn sm${mode === 'public' ? ' primary' : ''}`}
+                onClick={() => setMode('public')}
+              >
+                Public league
               </button>
             </div>
 
-            <details className="small" style={{ marginTop: 12 }}>
-              <summary>Where do I find these?</summary>
-              <p>
-                Sign in at espn.com, open DevTools (F12) → Application → Cookies
-                → <code>espn.com</code>, and copy <code>SWID</code> and{' '}
-                <code>espn_s2</code>.
-              </p>
-              <p className="tiny faint">
-                <code>espn_s2</code> is an HttpOnly cookie, so no bookmarklet or
-                page script can read it — that is a browser security boundary,
-                not something this app can work around. The extension can,
-                because it uses the browser's own cookies API with your
-                permission.
-              </p>
-            </details>
-
-            {showExtension && (
-              <div className="connect-panel inset">
-                <h4>Browser extension</h4>
+            {mode === 'public' ? (
+              <>
                 <p className="small">
-                  Load <code>browser-extension/</code> at{' '}
-                  <code>chrome://extensions</code> (Developer mode → Load
-                  unpacked), open your ESPN league, and click it. Generate a
-                  pairing code here and type it into the extension once.
+                  A public ESPN league answers with no credentials at all, so
+                  this works on a phone. Not sure whether yours is public? Try
+                  it — a private league simply comes back as unreadable, and
+                  nothing is stored either way.
                 </p>
-                <button className="btn sm" onClick={generateCode} disabled={busy}>
-                  Generate pairing code
+
+                <label htmlFor="public-league-id">League id</label>
+                <input
+                  id="public-league-id"
+                  type="number"
+                  inputMode="numeric"
+                  value={manualLeagueId}
+                  onChange={(event) => setManualLeagueId(event.target.value)}
+                  placeholder="123456"
+                />
+                <p className="tiny faint">
+                  From your league URL: <code>…/league?leagueId=123456</code>
+                </p>
+
+                <label htmlFor="public-season">Season</label>
+                <input
+                  id="public-season"
+                  type="number"
+                  value={season}
+                  onChange={(event) => setSeason(event.target.value)}
+                />
+
+                <button
+                  className="btn primary"
+                  disabled={busy || !manualLeagueId.trim()}
+                  onClick={connectPublicLeague}
+                >
+                  {busy ? 'Checking…' : 'Find this league'}
                 </button>
-                {pairing && (
-                  <p className="pairing-code">
-                    <code>{pairing.code}</code>
-                    <span className="tiny faint">
-                      {' '}
-                      single use · expires in {Math.round(pairing.expires_in_seconds / 60)} min
-                    </span>
+              </>
+            ) : (
+              <>
+                <p className="small">
+                  ESPN has no API key — your league is reached with the same two
+                  session cookies your browser already holds. They are encrypted
+                  before storage, never logged, and never returned by this app.
+                  They are session credentials, though: anyone holding both can
+                  act as you on ESPN, which is why <strong>Disconnect ESPN</strong>{' '}
+                  deletes them outright, and why signing out of ESPN kills them at
+                  source. Full detail in <code>docs/espn-connection.md</code>.
+                </p>
+
+                <label htmlFor="connect-swid">SWID cookie</label>
+                <input
+                  id="connect-swid"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={swid}
+                  onChange={(event) => setSwid(event.target.value)}
+                  placeholder="{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+                />
+
+                <label htmlFor="connect-s2">espn_s2 cookie</label>
+                <input
+                  id="connect-s2"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={s2}
+                  onChange={(event) => setS2(event.target.value)}
+                  placeholder="AEB..."
+                />
+
+                <label htmlFor="connect-season">Season</label>
+                <input
+                  id="connect-season"
+                  type="number"
+                  value={season}
+                  onChange={(event) => setSeason(event.target.value)}
+                />
+
+                <div className="row wrap">
+                  <button
+                    className="btn primary"
+                    disabled={busy || !swid.trim() || !s2.trim()}
+                    onClick={saveCredentials}
+                  >
+                    {busy ? 'Connecting…' : 'Connect ESPN account'}
+                  </button>
+                  {!isMobile && (
+                    <button className="btn sm" onClick={() => setShowExtension((v) => !v)}>
+                      Use the browser extension instead
+                    </button>
+                  )}
+                </div>
+
+                <details className="small" style={{ marginTop: 12 }}>
+                  <summary>Where do I find these?</summary>
+                  <p>
+                    On a desktop browser, sign in at espn.com, open DevTools (F12)
+                    → Application → Cookies → <code>espn.com</code>, and copy{' '}
+                    <code>SWID</code> and <code>espn_s2</code>.
                   </p>
+                  <p className="tiny faint">
+                    <code>espn_s2</code> is an HttpOnly cookie, so no bookmarklet
+                    or page script can read it, and phone browsers have no
+                    DevTools to read it from. That is a browser security
+                    boundary, not something this app can work around.
+                  </p>
+                </details>
+
+                {showExtension && !isMobile && (
+                  <div className="connect-panel inset">
+                    <h4>Browser extension (desktop only)</h4>
+                    <p className="small">
+                      Not published to any store — it ships in this repository at{' '}
+                      <code>browser-extension/</code>. Load it at{' '}
+                      <code>chrome://extensions</code> (Developer mode → Load
+                      unpacked), open your ESPN league, and click it. Generate a
+                      pairing code here and type it into the extension once.
+                    </p>
+                    <p className="tiny faint">
+                      It saves copying a 300-character cookie by hand. Chrome and
+                      Edge on desktop only — mobile browsers do not run
+                      extensions.
+                    </p>
+                    <button className="btn sm" onClick={generateCode} disabled={busy}>
+                      Generate pairing code
+                    </button>
+                    {pairing && (
+                      <p className="pairing-code">
+                        <code>{pairing.code}</code>
+                        <span className="tiny faint">
+                          {' '}
+                          single use · expires in{' '}
+                          {Math.round(pairing.expires_in_seconds / 60)} min
+                        </span>
+                      </p>
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             )}
           </div>
         )}
