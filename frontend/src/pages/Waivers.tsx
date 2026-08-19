@@ -86,40 +86,32 @@ export default function Waivers() {
 
       {/* A wire that returns one position reads as broken. It usually isn't --
           it means everything else you start already beats what is out there --
-          but that has to be said, not left to be inferred from an empty list. */}
+          but that has to be said, not left to be inferred from an empty list.
+
+          Not a table: the useful part is a sentence, and a sentence in a table
+          cell on a phone either overflows the screen or gets truncated. Rows
+          that stack and wrap say the same thing and fit. */}
       {data.by_position && data.by_position.length > 0 && (
         <Card title="Every position, and why">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>POS</th>
-                <th className="num">FREE</th>
-                <th>BEST AVAILABLE</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.by_position.map((row) => (
-                <tr key={row.position}>
-                  <td>
+          <ul className="wire-verdicts">
+            {data.by_position.map((row) => (
+              <li key={row.position} className={row.helps ? 'helps' : undefined}>
+                <div className="row between" style={{ gap: 8 }}>
+                  <div className="row" style={{ gap: 7, minWidth: 0 }}>
                     <span className={`pos ${row.position}`}>{row.position}</span>
-                  </td>
-                  <td className="num faint">{row.considered}</td>
-                  <td>
-                    <div className="small">{row.best_name}</div>
-                    <div className="tiny faint">{row.best_points.toFixed(0)} pts</div>
-                  </td>
-                  <td className="small">
-                    {row.helps ? (
-                      <span className="good">upgrade below</span>
-                    ) : (
-                      <span className="faint">{row.note}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <span className="small">{row.best_name}</span>
+                    <span className="tiny faint">{row.best_points.toFixed(0)} pts</span>
+                  </div>
+                  <span className="tiny faint" style={{ flexShrink: 0 }}>
+                    {row.considered} free
+                  </span>
+                </div>
+                <div className={`tiny ${row.helps ? 'good' : 'faint'}`}>
+                  {row.helps ? 'Upgrade — see below' : row.note}
+                </div>
+              </li>
+            ))}
+          </ul>
         </Card>
       )}
 
