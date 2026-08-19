@@ -50,7 +50,7 @@ A snapshot, so a future session doesn't re-derive it or contradict it.
 | Connect ESPN flow: discover leagues → confirm rules → import | **Built** — `services/espn_connect.py`, `ConnectEspn.tsx` |
 | League discovery from the ESPN fan profile | **Built** — `espn/discovery.py` |
 | Public-league import with no credentials | **Built** |
-| ESPN Email Code (OTP) connect — the primary method | **Built to the observed Disney contract; final live server-side proof pending** — see below |
+| ESPN Email Code (OTP) connect — the primary method | **Built and proven live** (real account → code → private league HTTP 200, 4 teams). One variable left: the server-side VPS origin — see below |
 | Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
 | Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
 | Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
@@ -123,13 +123,19 @@ procedure for all four, and what to do when one breaks, is the runbook
 
 **OTP changes the iPhone-private story.** That case previously had no browser
 path and was marked "native app required". OTP connects a private league on an
-iPhone with no app and no desktop — which is why it is now primary. It is built
-to the **observed** Disney contract (from a real browser capture of the
-passwordless login, four POSTs ending in `data.s2` + `data.profile.swid`), so it
-is no longer guesswork; the one remaining step is the final live *server-side*
-proof — running the flow from the backend against a private test league via
-`scripts/test_espn_otp.py`. Native becomes a reliability fallback rather than the
-only option. The **Share → Fantasy War Room** iOS share target is still worth
+iPhone with no app and no desktop — which is why it is now primary. The full
+flow has been **run live against real Disney**: a real ESPN account, a real
+emailed code, ending in `SWID` + `espn_s2` that read the private test league
+(30039838) at HTTP 200 with its four teams. The contract in `oneid.py` matches
+the observed responses exactly. Native drops from "required" to a reliability
+fallback.
+
+The one variable not yet exercised: that live run originated from a *desktop*
+IP. Production makes these calls **server-side from the Windows VPS** (a
+datacenter IP), and Disney's risk scoring *could* treat that differently. To
+confirm, run `scripts/test_espn_otp.py` on the VPS itself; a green run there
+closes it. Low-volume account recovery is not usually IP-gated, so this is a
+check, not an expected failure. The **Share → Fantasy War Room** iOS share target is still worth
 building, but now as a convenience on the #2 fallback rather than the mobile
 answer.
 
