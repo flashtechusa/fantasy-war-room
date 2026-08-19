@@ -47,7 +47,10 @@ export default function Waivers() {
         <div className="row between">
           <div className="small">
             <div className="muted">
-              {data.free_agents_considered} free agents considered
+              {data.free_agents_considered} considered
+              {data.free_agents_available
+                ? ` of ${data.free_agents_available} free agents`
+                : ' free agents'}
             </div>
             <div className="tiny faint">
               Roster {data.roster_size} · {data.roster_is_full ? 'full' : 'has space'}
@@ -80,6 +83,45 @@ export default function Waivers() {
           {refreshing ? 'Refreshing…' : 'Refresh free agents from ESPN'}
         </button>
       </Card>
+
+      {/* A wire that returns one position reads as broken. It usually isn't --
+          it means everything else you start already beats what is out there --
+          but that has to be said, not left to be inferred from an empty list. */}
+      {data.by_position && data.by_position.length > 0 && (
+        <Card title="Every position, and why">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>POS</th>
+                <th className="num">FREE</th>
+                <th>BEST AVAILABLE</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.by_position.map((row) => (
+                <tr key={row.position}>
+                  <td>
+                    <span className={`pos ${row.position}`}>{row.position}</span>
+                  </td>
+                  <td className="num faint">{row.considered}</td>
+                  <td>
+                    <div className="small">{row.best_name}</div>
+                    <div className="tiny faint">{row.best_points.toFixed(0)} pts</div>
+                  </td>
+                  <td className="small">
+                    {row.helps ? (
+                      <span className="good">upgrade below</span>
+                    ) : (
+                      <span className="faint">{row.note}</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
 
       {data.targets.length === 0 ? (
         <Banner kind="info">

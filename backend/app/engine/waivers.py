@@ -86,6 +86,91 @@ def _droppable(
     return out
 
 
+@dataclass
+class PositionVerdict:
+    """Why a position produced no recommendation -- or produced one."""
+
+    position: str
+    considered: int
+    #: Best free agent at this position, by rest-of-season points.
+    best_name: str = ""
+    best_points: float = 0.0
+    #: What you already start there, which is the bar he had to clear.
+    incumbent_name: str = ""
+    incumbent_points: float = 0.0
+    helps: bool = False
+    note: str = ""
+
+
+def explain_by_position(
+    roster: list[WeeklyPlayer],
+    free_agents: list[WeeklyPlayer],
+    shape: LeagueShape,
+    recommended: set[int],
+) -> list[PositionVerdict]:
+    """Per position: the best man available, and why he did or didn't make it.
+
+    A wire that returns eight defences and nothing else looks broken. Usually
+    it isn't -- it means every other position on the roster already beats what
+    is out there. That is a useful answer, and it was being thrown away: a
+    candidate who does not improve the lineup is dropped silently, so the
+    screen could only ever show the one position where the wire wins.
+    """
+    lineup = build_optimal_lineup(
+        [p.as_roster_player(use_week=False) for p in roster], shape
+    )
+    weakest_starter: dict[str, WeeklyPlayer] = {}
+    by_id = {p.espn_player_id: p for p in roster}
+    for assignment in lineup.starters:
+        if assignment.player is None:
+            continue
+        player = by_id.get(assignment.player.espn_player_id)
+        if player is None:
+            continue
+        current = weakest_starter.get(player.position)
+        if current is None or player.season_points < current.season_points:
+            weakest_starter[player.position] = player
+
+    out: list[PositionVerdict] = []
+    for position in sorted({p.position for p in free_agents}):
+        group = sorted(
+            [p for p in free_agents if p.position == position],
+            key=lambda p: p.season_points,
+            reverse=True,
+        )
+        if not group:
+            continue
+        best = group[0]
+        incumbent = weakest_starter.get(position)
+        helps = any(p.espn_player_id in recommended for p in group)
+
+        if helps:
+            note = "on the list below"
+        elif incumbent is None:
+            note = f"you start nobody at {position}"
+        else:
+            margin = incumbent.season_points - best.season_points
+            note = (
+                f"{best.name} is the best out there and projects "
+                f"{margin:.0f} pts less than {incumbent.name}, "
+                f"who you already start"
+            )
+
+        out.append(
+            PositionVerdict(
+                position=position,
+                considered=len(group),
+                best_name=best.name,
+                best_points=best.season_points,
+                incumbent_name=incumbent.name if incumbent else "",
+                incumbent_points=incumbent.season_points if incumbent else 0.0,
+                helps=helps,
+                note=note,
+            )
+        )
+    return out
+
+
 def recommend_waivers(
     roster: list[WeeklyPlayer],
     free_agents: list[WeeklyPlayer],

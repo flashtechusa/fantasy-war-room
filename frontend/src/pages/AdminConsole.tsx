@@ -13,6 +13,7 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { useAsync } from '../useAsync'
+import { Banner, Card } from '../components'
 import Access from './Access'
 import '../landing.css'
 
@@ -97,6 +98,67 @@ function AdminSignIn({
   )
 }
 
+
+function PoolMaintenance() {
+  // The fix for contaminated data is automatic -- rankings are filtered by
+  // source, so foreign players are already ignored. This removes the dead rows,
+  // and exists here because the alternative was a command line.
+  const state = useAsync(() => api.foreignPlayers(), [])
+  const [busy, setBusy] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+
+  if (state.loading || state.error || !state.data) return null
+  const { foreign, pool_total, by_position, sample } = state.data
+  if (!foreign) {
+    return (
+      <Card title="Player pool">
+        <div className="small faint">
+          {pool_total} players, all belonging to a league here. Nothing to clean up.
+        </div>
+      </Card>
+    )
+  }
+
+  async function remove() {
+    setBusy(true)
+    try {
+      const result = await api.removeForeignPlayers()
+      setDone(result.detail)
+      state.reload()
+    } catch (error) {
+      setDone(error instanceof Error ? error.message : 'Could not remove them.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="Player pool">
+      {done && <Banner kind="info">{done}</Banner>}
+      <div className="small">
+        <strong>{foreign}</strong> of {pool_total} players belong to no league here.
+        They are already excluded from every ranking; this deletes the rows.
+      </div>
+      <div className="tiny faint" style={{ marginTop: 6 }}>
+        {Object.entries(by_position)
+          .map(([position, count]) => `${position} ${count}`)
+          .join(' · ')}
+      </div>
+      <div className="tiny faint" style={{ marginTop: 6 }}>
+        For example: {sample.map((p) => `${p.name} (${p.position})`).join(', ')}
+      </div>
+      <button
+        className="btn sm block"
+        style={{ marginTop: 10 }}
+        onClick={remove}
+        disabled={busy}
+      >
+        {busy ? 'Removing…' : `Remove ${foreign} players`}
+      </button>
+    </Card>
+  )
+}
+
 export default function AdminConsole() {
   const auth = useAsync(() => api.me(), [])
 
@@ -149,6 +211,7 @@ export default function AdminConsole() {
 
       <main className="app-main">
         <Access />
+        <PoolMaintenance />
       </main>
     </div>
   )

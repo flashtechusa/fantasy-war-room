@@ -178,3 +178,80 @@ def mark_request(
     row.handled = handled
     session.commit()
     return {"id": row.id, "handled": row.handled}
+
+
+# ---------------------------------------------------------------------------
+# Maintenance
+# ---------------------------------------------------------------------------
+
+
+@router.get("/foreign-players")
+def count_foreign_players(
+    session: Session = Depends(get_db), user=Depends(owner_only)
+) -> dict:
+    """Players in the pool that belong to no league here.
+
+    Rankings already ignore them -- they are filtered by source -- so this is
+    housekeeping rather than a fix. It exists because the alternative was a
+    command line, and the person who needs it is on a phone.
+    """
+    from ..models import League, Player
+
+    leagues = session.scalars(select(League)).all()
+    ours = {lg.source for lg in leagues} or {"espn"}
+    rows = session.scalars(select(Player)).all()
+    foreign = [p for p in rows if (p.source or "espn") not in ours]
+
+    by_position: dict[str, int] = {}
+    for player in foreign:
+        by_position[player.position] = by_position.get(player.position, 0) + 1
+
+    return {
+        "pool_total": len(rows),
+        "foreign": len(foreign),
+        "sources_in_use": sorted(ours),
+        "by_position": by_position,
+        "sample": [
+            {"name": p.name, "position": p.position, "source": p.source or "espn"}
+            for p in foreign[:8]
+        ],
+    }
+
+
+@router.delete("/foreign-players")
+def delete_foreign_players(
+    session: Session = Depends(get_db), user=Depends(owner_only)
+) -> dict:
+    """Delete them, with their projections. Owner only."""
+    from ..models import (
+        League,
+        Player,
+        PlayerProjection,
+        PlayerWeeklyProjection,
+    )
+    from ..services import board as board_service
+
+    leagues = session.scalars(select(League)).all()
+    ours = {lg.source for lg in leagues} or {"espn"}
+    foreign = [
+        p
+        for p in session.scalars(select(Player)).all()
+        if (p.source or "espn") not in ours
+    ]
+    if not foreign:
+        return {"deleted": 0, "detail": "Nothing to remove."}
+
+    ids = [p.id for p in foreign]
+    for start in range(0, len(ids), 500):
+        chunk = ids[start : start + 500]
+        for model in (PlayerWeeklyProjection, PlayerProjection):
+            for row in session.scalars(
+                select(model).where(model.player_id.in_(chunk))
+            ).all():
+                session.delete(row)
+        for player in session.scalars(select(Player).where(Player.id.in_(chunk))).all():
+            session.delete(player)
+    session.commit()
+    board_service.clear_cache()
+    log.info("Removed %s foreign players from the pool", len(ids))
+    return {"deleted": len(ids), "detail": f"Removed {len(ids)} players."}

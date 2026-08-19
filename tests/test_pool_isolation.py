@@ -235,3 +235,50 @@ class TestAnAccountWithNoLeagueCannotImport:
             assert session.query(Player).count() == 0, (
                 "a client with no ESPN connection created players"
             )
+
+
+class TestTheOwnerCanCleanUpWithoutATerminal:
+    """The person who needs the cleanup is on a phone, not at a command line."""
+
+    def _sign_in_owner(self, anon_client):
+        from app.db import session_scope
+        from app.services import auth as auth_service
+
+        with session_scope() as session:
+            auth_service.ensure_owner(session, "owner", "owner-password-1")
+            session.commit()
+        anon_client.post(
+            "/api/auth/login",
+            json={"username": "owner", "password": "owner-password-1"},
+        )
+
+    def test_foreign_players_are_counted_and_removable(
+        self, anon_client, drafted_league, league_and_engine
+    ):
+        _, season, source = league_and_engine
+        add_foreign_players(source, season, 6, "WR", 900, first_id=901000)
+        self._sign_in_owner(anon_client)
+
+        before = anon_client.get("/api/admin/foreign-players")
+        assert before.status_code == 200, before.text
+        assert before.json()["foreign"] == 6
+        assert before.json()["sample"], "no examples to show the owner"
+
+        removed = anon_client.delete("/api/admin/foreign-players")
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["deleted"] == 6
+
+        after = anon_client.get("/api/admin/foreign-players")
+        assert after.json()["foreign"] == 0
+
+    def test_a_client_account_cannot_delete_the_pool(self, anon_client):
+        self._sign_in_owner(anon_client)
+        created = anon_client.post(
+            "/api/admin/users", json={"username": "ari", "role": "client"}
+        ).json()
+        anon_client.post("/api/auth/logout")
+        anon_client.post(
+            "/api/auth/login",
+            json={"username": "ari", "password": created["password"]},
+        )
+        assert anon_client.delete("/api/admin/foreign-players").status_code == 403

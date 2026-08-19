@@ -432,6 +432,17 @@ export interface WaiverResponse {
   roster_size: number
   roster_is_full: boolean
   free_agents_considered: number
+  free_agents_available: number
+  by_position: {
+    position: string
+    considered: number
+    best_name: string
+    best_points: number
+    incumbent_name: string
+    incumbent_points: number
+    helps: boolean
+    note: string
+  }[]
   uses_faab: boolean
   faab_budget: number
   targets: {
@@ -856,6 +867,18 @@ export const api = {
     if (week) query.set('week', String(week))
     return request<WaiverResponse>(`/api/season/waivers?${query.toString()}`)
   },
+  foreignPlayers: () =>
+    request<{
+      pool_total: number
+      foreign: number
+      sources_in_use: string[]
+      by_position: Record<string, number>
+      sample: { name: string; position: string; source: string }[]
+    }>('/api/admin/foreign-players'),
+  removeForeignPlayers: () =>
+    request<{ deleted: number; detail: string }>('/api/admin/foreign-players', {
+      method: 'DELETE',
+    }),
   refreshWaivers: (week?: number) =>
     request<{ free_agents_imported: number }>(
       `/api/season/waivers/refresh${week ? `?week=${week}` : ''}`,

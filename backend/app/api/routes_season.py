@@ -12,7 +12,7 @@ from ..config import Settings
 from ..db import get_db
 from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
-from ..engine.waivers import recommend_waivers
+from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
 from ..espn.client import EspnConnectionError, EspnNotConfigured
 from ..models import League
@@ -24,6 +24,10 @@ from .deps import engine_dep, league_dep, settings_dep
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/season", tags=["season"])
+
+#: How deep down each position's wire to look. Per position rather than
+#: overall, so a position with small point totals is never crowded out.
+WIRE_DEPTH_PER_POSITION = 40
 
 
 def _serialize_player(player: WeeklyPlayer) -> dict:
@@ -178,10 +182,24 @@ def waivers(
     roster = season_service.build_weekly_players(
         session, league, engine, week, espn_player_ids=roster_ids
     )
-    free_agents = season_service.build_weekly_players(
-        session, league, engine, week,
-        availability={"FREEAGENT", "WAIVERS"}, limit=180,
+    # Per position, not a flat cut. Sorting the whole wire by projected points
+    # and keeping the top 180 is position-blind: quarterbacks project three
+    # times what a kicker does, so a deep wire silently starves K and DST out
+    # of the candidate pool entirely -- exactly when one of them is the upgrade
+    # you needed.
+    everyone = season_service.build_weekly_players(
+        session, league, engine, week, availability={"FREEAGENT", "WAIVERS"}
     )
+    by_position: dict[str, list] = {}
+    for player in everyone:
+        by_position.setdefault(player.position, []).append(player)
+    free_agents = [
+        player
+        for group in by_position.values()
+        for player in sorted(group, key=lambda p: p.season_points, reverse=True)[
+            :WIRE_DEPTH_PER_POSITION
+        ]
+    ]
 
     shape = league_shape(league)
     targets = recommend_waivers(
@@ -195,11 +213,31 @@ def waivers(
         limit=limit,
     )
 
+    verdicts = explain_by_position(
+        roster, free_agents, shape, {t.player.espn_player_id for t in targets}
+    )
+
     return {
         "week": week,
         "roster_size": len(roster),
         "roster_is_full": len(roster) >= shape.roster_size,
         "free_agents_considered": len(free_agents),
+        "free_agents_available": len(everyone),
+        # Why the list below looks the way it does. A wire that returns one
+        # position reads as broken without this.
+        "by_position": [
+            {
+                "position": v.position,
+                "considered": v.considered,
+                "best_name": v.best_name,
+                "best_points": v.best_points,
+                "incumbent_name": v.incumbent_name,
+                "incumbent_points": v.incumbent_points,
+                "helps": v.helps,
+                "note": v.note,
+            }
+            for v in verdicts
+        ],
         "uses_faab": league.uses_faab,
         "faab_budget": league.acquisition_budget,
         "faab_remaining": settings.faab_remaining,
