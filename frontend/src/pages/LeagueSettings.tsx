@@ -57,6 +57,97 @@ function EspnConnectionCard() {
 }
 
 /**
+ * Change your own password.
+ *
+ * New accounts arrive with a generated password that was, by necessity, sent
+ * to them through some chat window. Without this there is no way to replace
+ * it, so that password stays valid forever wherever it was pasted.
+ */
+function PasswordCard() {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault()
+    if (next !== confirm) {
+      setResult({ ok: false, text: 'The two new passwords do not match.' })
+      return
+    }
+    setBusy(true)
+    setResult(null)
+    try {
+      await api.changePassword(current, next)
+      setCurrent('')
+      setNext('')
+      setConfirm('')
+      setResult({
+        ok: true,
+        text: 'Password changed. Any other browser you were signed in on has been signed out.',
+      })
+    } catch (error) {
+      setResult({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="Your password">
+      <form onSubmit={submit} method="post">
+        <input type="text" name="username" autoComplete="username" hidden readOnly value="" />
+        <label className="tiny faint">CURRENT PASSWORD</label>
+        <input
+          type="password"
+          name="current-password"
+          autoComplete="current-password"
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          required
+          style={{ marginBottom: 8 }}
+        />
+        <label className="tiny faint">NEW PASSWORD</label>
+        <input
+          type="password"
+          name="new-password"
+          autoComplete="new-password"
+          minLength={10}
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+          required
+          style={{ marginBottom: 8 }}
+        />
+        <label className="tiny faint">CONFIRM NEW PASSWORD</label>
+        <input
+          type="password"
+          name="confirm-password"
+          autoComplete="new-password"
+          minLength={10}
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+          required
+          style={{ marginBottom: 10 }}
+        />
+        <button className="btn primary block" type="submit" disabled={busy}>
+          {busy ? 'Changing…' : 'Change password'}
+        </button>
+      </form>
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        At least 10 characters. Changing it signs you out everywhere else, which
+        is the point if the old one was sent to you in a message.
+      </div>
+      {result && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * A second projection source, so everything does not rest on ESPN's numbers.
  *
  * Bring your own key: nothing is bundled, and the source stays inert until one
@@ -421,6 +512,8 @@ export default function LeagueSettings({
   return (
     <>
       {message && <Banner kind={message.kind === 'error' ? 'error' : 'info'}>{message.text}</Banner>}
+
+      <PasswordCard />
 
       {isOwner && <FantasyProsCard onImported={() => onChange?.()} />}
 

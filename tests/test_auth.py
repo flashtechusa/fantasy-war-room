@@ -17,26 +17,26 @@ def account(anon_client):
     from app.services import auth as auth_service
 
     with session_scope() as session:
-        auth_service.ensure_owner(session, "flash", "Captain02!")
+        auth_service.ensure_owner(session, "flash", "pw-fixture-Zx7q!")
         session.commit()
-    return {"username": "flash", "password": "Captain02!"}
+    return {"username": "flash", "password": "pw-fixture-Zx7q!"}
 
 
 class TestPasswordHashing:
     def test_a_password_verifies_against_its_own_hash(self):
         from app.services.auth import hash_password, verify_password
 
-        assert verify_password("Captain02!", hash_password("Captain02!"))
+        assert verify_password("pw-fixture-Zx7q!", hash_password("pw-fixture-Zx7q!"))
 
     def test_a_wrong_password_does_not(self):
         from app.services.auth import hash_password, verify_password
 
-        assert not verify_password("wrong", hash_password("Captain02!"))
+        assert not verify_password("wrong", hash_password("pw-fixture-Zx7q!"))
 
     def test_the_password_is_not_recoverable_from_the_hash(self):
         from app.services.auth import hash_password
 
-        assert "Captain02!" not in hash_password("Captain02!")
+        assert "pw-fixture-Zx7q!" not in hash_password("pw-fixture-Zx7q!")
 
     def test_the_same_password_hashes_differently_each_time(self):
         """Per-user salt: identical passwords must not share a hash."""

@@ -50,16 +50,34 @@ def ensure_projection_sources(session: Session) -> None:
 
 
 def get_active_league(session: Session, settings: Settings | None = None) -> League | None:
-    """The league this app instance is configured for."""
+    """The league these settings point at, or None.
+
+    Strict on purpose. This used to fall back to "whatever was imported most
+    recently" when nothing matched, which was harmless with one user and a
+    disclosure with two: a signed-in account that had configured no league of
+    its own was handed somebody else's, with their roster and their waivers.
+
+    No configured league now means no league, and the caller says so.
+    """
     settings = settings or get_settings()
-    stmt = select(League).where(League.season == settings.espn_season)
-    if settings.espn_league_id is not None and not settings.demo_mode:
-        stmt = stmt.where(League.espn_league_id == settings.espn_league_id)
-    league = session.scalars(stmt.order_by(League.imported_at.desc())).first()
-    if league is not None:
-        return league
-    # Fall back to whatever has been imported (e.g. the demo league).
-    return session.scalars(select(League).order_by(League.imported_at.desc())).first()
+
+    if settings.demo_mode:
+        # Demo mode is explicitly "show me anything"; that is its whole job.
+        return session.scalars(
+            select(League).order_by(League.imported_at.desc())
+        ).first()
+
+    if settings.espn_league_id is None:
+        return None
+
+    return session.scalars(
+        select(League)
+        .where(
+            League.espn_league_id == settings.espn_league_id,
+            League.season == settings.espn_season,
+        )
+        .order_by(League.imported_at.desc())
+    ).first()
 
 
 # ---------------------------------------------------------------------------

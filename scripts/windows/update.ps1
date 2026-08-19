@@ -154,15 +154,23 @@ if ($before -eq $after) {
     Write-Host "  (Same bundle -- you were already on the latest frontend.)"
 }
 
-# A healthy app with an empty database is the failure this whole script exists
-# to make visible, so check for it rather than reporting a bare success.
+# A healthy app pointed at an empty database is the failure this script exists
+# to make visible. It cannot be checked over HTTP any more -- /api/health is
+# deliberately anonymous-safe and reports no league to a caller that has not
+# signed in -- so ask the database directly.
 try {
-    $league = (Invoke-WebRequest -UseBasicParsing `
-        -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 4).Content | ConvertFrom-Json
-    if ($league.league_imported) {
-        Write-Host "  League: $($league.league.name)" -ForegroundColor Green
-    } else {
-        Write-Bad '  No league is loaded. If you had one, the database path is wrong.'
+    $probe = "import sys; sys.path.insert(0, r'$InstallDir\backend'); " +
+             "from app.db import get_session_factory, init_db; " +
+             "from app.models import League; init_db(); " +
+             "s = get_session_factory()(); " +
+             "rows = s.query(League).all(); " +
+             "print('LEAGUES:' + '; '.join(f'{l.name} ({l.season})' for l in rows) if rows else 'LEAGUES:none')"
+    $env:FWR_DATABASE_URL = $dbUrl
+    $found = & $python -c $probe 2>$null | Select-String '^LEAGUES:'
+    if ($found -and $found.Line -ne 'LEAGUES:none') {
+        Write-Host "  $($found.Line -replace '^LEAGUES:', 'Leagues: ')" -ForegroundColor Green
+    } elseif ($found) {
+        Write-Bad '  The database has no leagues in it. If you had one, the path is wrong.'
     }
 } catch { }
 
