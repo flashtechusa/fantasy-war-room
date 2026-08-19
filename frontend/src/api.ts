@@ -583,6 +583,23 @@ export interface EspnConnectionStatus {
   updated_at?: string | null
   can_discover: boolean
   manual_entry_available?: boolean
+  otp_available?: boolean
+  public_link_available?: boolean
+}
+
+export interface OtpFlowState {
+  sent?: boolean
+  flow_id: string
+  state: string
+  expires_in_seconds: number
+  last_error?: string
+}
+
+export interface OtpVerifyResult {
+  connected: boolean
+  verified: boolean
+  proof: { leagues_found: number; confirmed: boolean; detail: string }
+  status: EspnConnectionStatus
 }
 
 export interface DiscoveredTeam {
@@ -706,6 +723,19 @@ export const api = {
     request<{ stored: boolean; status: EspnConnectionStatus }>('/api/espn/credentials', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+
+  // ESPN Email Code (OTP) — the primary method. Two calls: send, then verify.
+  espnOtpStart: (email: string) =>
+    request<OtpFlowState>('/api/espn/otp/start', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    }),
+
+  espnOtpVerify: (flow_id: string, code: string) =>
+    request<OtpVerifyResult>('/api/espn/otp/verify', {
+      method: 'POST',
+      body: JSON.stringify({ flow_id, code }),
     }),
 
   discoverEspnLeagues: (season?: number, leagueId?: number) => {

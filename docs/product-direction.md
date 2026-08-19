@@ -50,6 +50,7 @@ A snapshot, so a future session doesn't re-derive it or contradict it.
 | Connect ESPN flow: discover leagues → confirm rules → import | **Built** — `services/espn_connect.py`, `ConnectEspn.tsx` |
 | League discovery from the ESPN fan profile | **Built** — `espn/discovery.py` |
 | Public-league import with no credentials | **Built** |
+| ESPN Email Code (OTP) connect — the primary method | **Built, contract unverified against live Disney** — see below |
 | Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
 | Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
 | Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
@@ -102,21 +103,32 @@ split, and the product should treat it as one.
 This matters the moment two people share a league in the app: an unverified
 connection must never be treated as proof of team ownership.
 
-### Connection lanes, by case
+### Connection methods, in priority order
 
-| Case | Path | Verified? |
-|---|---|---|
-| Public league, any device | League URL or id → anonymous import → user picks team | Unverified |
-| Public league, mobile | **Share → Fantasy War Room** hands the app the ESPN URL; it extracts the league id — no typing | Unverified |
-| Private league, desktop | Chrome/Edge extension captures cookies | Verified |
-| Private league, Android phone | An extension-capable browser (Firefox for Android) is a workable phone-only fallback | Verified |
-| Private league, iPhone | **Native app required** — no browser path exists (see dead ends) | Verified |
-| Any private league | Manual cookie paste from desktop DevTools | Verified |
+Offered in this order; all converge on the same stored `SWID` + `espn_s2`.
 
-The **Share → Fantasy War Room** target is the next concrete build for the
-public lane: register the PWA as an iOS share target so a user on an ESPN page
-taps Share and the app receives the URL. It removes the last manual step on the
-one lane that already works phone-only.
+| # | Method | Works for | Device | Verified? |
+|---|---|---|---|---|
+| 1 | **ESPN Email Code (OTP)** — primary | public + private | **any, incl. iPhone** | Verified |
+| 2 | Public League Link | public only | any | Unverified |
+| 3 | Browser Extension (PoC, dev-mode) | public + private | desktop Chrome/Edge | Verified |
+| 4 | Manual `SWID` + `espn_s2` | public + private | desktop (needs DevTools) | Verified |
+
+OTP is preferred even for public leagues, because it authenticates and so
+verifies team ownership, which the public link cannot. The rest are fallbacks in
+that order, and manual is **permanent** — it depends on nothing but a desktop
+browser, so it is the floor under everything else. The full user-facing
+procedure for all four, and what to do when one breaks, is the runbook
+`espn-connection-backup.md`.
+
+**OTP changes the iPhone-private story.** That case previously had no browser
+path and was marked "native app required". OTP, if it proves out against live
+Disney, connects a private league on an iPhone with no app and no desktop —
+which is why it is now primary. It is built, but its Disney request/response
+contract is a best guess until `scripts/test_espn_otp.py` runs it live; native
+becomes a reliability fallback rather than the only option. The **Share →
+Fantasy War Room** iOS share target is still worth building, but now as a
+convenience on the #2 fallback rather than the mobile answer.
 
 ### Server-side ownership enforcement (required, not yet done)
 

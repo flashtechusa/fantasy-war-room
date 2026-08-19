@@ -3,6 +3,14 @@
 How Fantasy War Room gets at your ESPN league, what the credentials involved
 can do, and how to take them back.
 
+> **Primary method: ESPN Email Code (OTP).** The app now leads with a
+> passwordless flow — enter your ESPN email, get a six-digit code, done — which
+> works on any device including iPhone and verifies team ownership. This
+> document is the deeper reference on the *cookies* every method ends up with
+> and how they are protected. For the step-by-step of each connect method and
+> what to do when one breaks, see the runbook
+> [`espn-connection-backup.md`](espn-connection-backup.md).
+
 ---
 
 ## The flow

@@ -23,6 +23,10 @@ import { useAsync } from '../useAsync'
 
 type Step = 'credentials' | 'pick-league' | 'confirm' | 'done'
 
+//: Credential-acquisition methods, in the order they are offered. They all
+//: converge on the same stored SWID + espn_s2 — only the acquisition differs.
+type Method = 'otp' | 'public' | 'extension' | 'manual'
+
 /**
  * Whether this is a phone or tablet.
  *
@@ -41,6 +45,15 @@ function currentSeason(): number {
   // still the live one.
   const now = new Date()
   return now.getMonth() >= 4 ? now.getFullYear() : now.getFullYear() - 1
+}
+
+/** Pull a league id out of a pasted ESPN URL, or keep a plain number. */
+function extractLeagueId(input: string): string {
+  const value = (input || '').trim()
+  const fromUrl = value.match(/leagueid=(\d+)/i) || value.match(/\/leagues?\/(\d+)/i)
+  if (fromUrl) return fromUrl[1]
+  const digits = value.match(/\d+/)
+  return digits ? digits[0] : value.replace(/\D/g, '')
 }
 
 function LeagueRow({
@@ -159,11 +172,32 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
   const [teamId, setTeamId] = useState<number | null>(null)
   const [autoDetected, setAutoDetected] = useState(false)
   const [pairing, setPairing] = useState<PairingCode | null>(null)
-  const [showExtension, setShowExtension] = useState(false)
-  //: private = cookies (desktop once); public = league id only (works anywhere).
-  const [mode, setMode] = useState<'private' | 'public'>('private')
+  const [method, setMethod] = useState<Method>('otp')
+  const [methodPinned, setMethodPinned] = useState(false)
   const [autoAdvanced, setAutoAdvanced] = useState(false)
   const isMobile = useMemo(isMobileBrowser, [])
+
+  // OTP (ESPN Email Code) — the primary method.
+  const [email, setEmail] = useState('')
+  const [otpFlowId, setOtpFlowId] = useState('')
+  const [otpSent, setOtpSent] = useState(false)
+  const [code, setCode] = useState('')
+
+  const otpAvailable = status.data?.otp_available ?? false
+
+  // Default to Email Code when the server supports it; otherwise Public Link,
+  // since that is the only other method a phone can complete. Only until the
+  // user picks one themselves.
+  useEffect(() => {
+    if (!status.data || methodPinned) return
+    setMethod(status.data.otp_available ? 'otp' : 'public')
+  }, [status.data, methodPinned])
+
+  function chooseMethod(next: Method) {
+    setMethodPinned(true)
+    setError('')
+    setMethod(next)
+  }
 
   // Credentials already stored (from a previous visit, or the extension) means
   // there is nothing to type -- go straight to finding leagues. Only once,
@@ -180,10 +214,34 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
 
   function reenterCredentials() {
     setAutoAdvanced(true)
-    setMode('private')
+    setMethodPinned(true)
+    setMethod(otpAvailable ? 'otp' : 'manual')
     setError('')
-    setNotice('Enter the current cookies from a desktop browser.')
+    setNotice('Reconnect your ESPN account.')
     setStep('credentials')
+  }
+
+  async function sendOtpCode() {
+    const result = await run(() => api.espnOtpStart(email.trim()))
+    if (!result) return
+    setOtpFlowId(result.flow_id)
+    setOtpSent(true)
+    setNotice('ESPN sent a login code to your email. Enter it below.')
+  }
+
+  async function verifyOtpCode() {
+    const result = await run(() => api.espnOtpVerify(otpFlowId, code.trim()))
+    if (!result) return
+    setCode('')
+    setOtpSent(false)
+    setNotice(
+      result.proof?.confirmed
+        ? `Connected and verified — ${result.proof.detail}`
+        : 'Connected.',
+    )
+    status.reload()
+    setStep('pick-league')
+    await discover()
   }
 
   async function run<T>(work: () => Promise<T>): Promise<T | null> {
@@ -341,53 +399,159 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
 
         {step === 'credentials' && (
           <div className="connect-panel">
-            {isMobile && mode === 'private' && (
-              <Banner kind="warn">
-                <strong>Private leagues need a desktop browser once.</strong> ESPN
-                protects the cookie we need with HttpOnly, and no phone browser
-                will hand it over — not Safari, not Chrome, not a bookmarklet.
-                Connect once on a laptop and this phone works for the rest of the
-                season. A <em>public</em> league needs nothing but its id and
-                works right here.
-              </Banner>
-            )}
-
-            <div className="row wrap" role="tablist" aria-label="League type">
+            {/* Method picker, in priority order. All four converge on the same
+                stored SWID + espn_s2 — only how they are acquired differs. */}
+            <div className="method-picker" role="tablist" aria-label="Connection method">
               <button
                 role="tab"
-                aria-selected={mode === 'private'}
-                className={`btn sm${mode === 'private' ? ' primary' : ''}`}
-                onClick={() => setMode('private')}
+                aria-selected={method === 'otp'}
+                className={`method-tab${method === 'otp' ? ' active' : ''}`}
+                onClick={() => chooseMethod('otp')}
               >
-                Private league
+                <span>ESPN Email Code</span>
+                <span className="method-badge">Recommended</span>
               </button>
               <button
                 role="tab"
-                aria-selected={mode === 'public'}
-                className={`btn sm${mode === 'public' ? ' primary' : ''}`}
-                onClick={() => setMode('public')}
+                aria-selected={method === 'public'}
+                className={`method-tab${method === 'public' ? ' active' : ''}`}
+                onClick={() => chooseMethod('public')}
               >
-                Public league
+                <span>Public League Link</span>
+              </button>
+              {!isMobile && (
+                <button
+                  role="tab"
+                  aria-selected={method === 'extension'}
+                  className={`method-tab${method === 'extension' ? ' active' : ''}`}
+                  onClick={() => chooseMethod('extension')}
+                >
+                  <span>Browser Extension</span>
+                </button>
+              )}
+              <button
+                role="tab"
+                aria-selected={method === 'manual'}
+                className={`method-tab${method === 'manual' ? ' active' : ''}`}
+                onClick={() => chooseMethod('manual')}
+              >
+                <span>Manual — Advanced</span>
               </button>
             </div>
 
-            {mode === 'public' ? (
-              <>
+            {/* 1 — ESPN Email Code (OTP): the primary method. */}
+            {method === 'otp' && (
+              <div className="connect-panel">
+                <Banner kind="warn">
+                  <strong>Experimental.</strong> New, and not yet proven against
+                  ESPN live. If it does not work, use Public League Link or Manual
+                  below — those are stable.
+                </Banner>
+
+                {!otpAvailable ? (
+                  <p className="small">
+                    ESPN Email Code is not enabled on this server yet. Use{' '}
+                    <button className="linklike" onClick={() => chooseMethod('public')}>
+                      Public League Link
+                    </button>{' '}
+                    or{' '}
+                    <button className="linklike" onClick={() => chooseMethod('manual')}>
+                      Manual
+                    </button>{' '}
+                    instead.
+                  </p>
+                ) : (
+                  <>
+                    <p className="small">
+                      Enter your ESPN email. ESPN sends you a six-digit login
+                      code — no password needed. This works for public and private
+                      leagues, and because it signs you in, it verifies your team
+                      is really yours.
+                    </p>
+
+                    {!otpSent ? (
+                      <>
+                        <label htmlFor="otp-email">ESPN email</label>
+                        <input
+                          id="otp-email"
+                          type="email"
+                          autoComplete="email"
+                          inputMode="email"
+                          value={email}
+                          onChange={(event) => setEmail(event.target.value)}
+                          placeholder="you@example.com"
+                        />
+                        <button
+                          className="btn primary"
+                          disabled={busy || !email.trim()}
+                          onClick={sendOtpCode}
+                        >
+                          {busy ? 'Sending…' : 'Send ESPN code'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <label htmlFor="otp-code">Six-digit code</label>
+                        <input
+                          id="otp-code"
+                          type="text"
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
+                          maxLength={8}
+                          value={code}
+                          onChange={(event) => setCode(event.target.value.replace(/\D/g, ''))}
+                          placeholder="123456"
+                        />
+                        <div className="row wrap">
+                          <button
+                            className="btn primary"
+                            disabled={busy || code.trim().length < 4}
+                            onClick={verifyOtpCode}
+                          >
+                            {busy ? 'Verifying…' : 'Verify & connect'}
+                          </button>
+                          <button
+                            className="btn sm"
+                            disabled={busy}
+                            onClick={() => {
+                              setOtpSent(false)
+                              setCode('')
+                              setNotice('')
+                            }}
+                          >
+                            Use a different email
+                          </button>
+                        </div>
+                        <p className="tiny faint">
+                          The code expires quickly. Didn't get it? Check spam, then
+                          start again.
+                        </p>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* 2 — Public League Link: quick, but ownership stays unverified. */}
+            {method === 'public' && (
+              <div className="connect-panel">
                 <p className="small">
-                  A public ESPN league answers with no credentials at all, so
-                  this works on a phone. Not sure whether yours is public? Try
-                  it — a private league simply comes back as unreadable, and
-                  nothing is stored either way.
+                  Paste a public ESPN league's link or id. This works on a phone
+                  with no sign-in — but because we can't confirm your ESPN
+                  identity, your team ownership is marked{' '}
+                  <strong>Unverified</strong>. A private league can't be read this
+                  way; use Email Code or Manual for that.
                 </p>
 
-                <label htmlFor="public-league-id">League id</label>
+                <label htmlFor="public-league-id">League link or id</label>
                 <input
                   id="public-league-id"
-                  type="number"
+                  type="text"
                   inputMode="numeric"
                   value={manualLeagueId}
-                  onChange={(event) => setManualLeagueId(event.target.value)}
-                  placeholder="123456"
+                  onChange={(event) => setManualLeagueId(extractLeagueId(event.target.value))}
+                  placeholder="123456 or paste the league URL"
                 />
                 <p className="tiny faint">
                   From your league URL: <code>…/league?leagueId=123456</code>
@@ -408,17 +572,53 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
                 >
                   {busy ? 'Checking…' : 'Find this league'}
                 </button>
-              </>
-            ) : (
-              <>
+              </div>
+            )}
+
+            {/* 3 — Browser extension: desktop backup, developer-mode only. */}
+            {method === 'extension' && !isMobile && (
+              <div className="connect-panel">
+                <Banner kind="info">
+                  Backup method. A proof-of-concept extension, not published to any
+                  store — Chrome/Edge on desktop, loaded in Developer mode.
+                </Banner>
                 <p className="small">
-                  ESPN has no API key — your league is reached with the same two
-                  session cookies your browser already holds. They are encrypted
-                  before storage, never logged, and never returned by this app.
-                  They are session credentials, though: anyone holding both can
-                  act as you on ESPN, which is why <strong>Disconnect ESPN</strong>{' '}
-                  deletes them outright, and why signing out of ESPN kills them at
-                  source. Full detail in <code>docs/espn-connection.md</code>.
+                  Load <code>browser-extension/</code> at{' '}
+                  <code>chrome://extensions</code> (Developer mode → Load unpacked),
+                  open your ESPN league, and click it. Generate a pairing code here
+                  and type it into the extension once. It reads ESPN's cookies and
+                  sends them straight to this server.
+                </p>
+                <button className="btn sm" onClick={generateCode} disabled={busy}>
+                  Generate pairing code
+                </button>
+                {pairing && (
+                  <p className="pairing-code">
+                    <code>{pairing.code}</code>
+                    <span className="tiny faint">
+                      {' '}
+                      single use · expires in{' '}
+                      {Math.round(pairing.expires_in_seconds / 60)} min
+                    </span>
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* 4 — Manual: the permanent last resort, always available. */}
+            {method === 'manual' && (
+              <div className="connect-panel">
+                <Banner kind="info">
+                  Advanced / backup. Use this when Email Code is down, or to
+                  connect a private league from a desktop. On a phone the values
+                  below are not reachable — a desktop browser is needed once.
+                </Banner>
+                <p className="small">
+                  Paste ESPN's two session cookies. They are encrypted before
+                  storage, never logged, and never shown again. Anyone holding both
+                  can act as you on ESPN — never post them, screenshot them, or put
+                  them in GitHub. <strong>Disconnect ESPN</strong> deletes them;
+                  signing out of ESPN invalidates them at source.
                 </p>
 
                 <label htmlFor="connect-swid">SWID cookie</label>
@@ -451,67 +651,33 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
                   onChange={(event) => setSeason(event.target.value)}
                 />
 
-                <div className="row wrap">
-                  <button
-                    className="btn primary"
-                    disabled={busy || !swid.trim() || !s2.trim()}
-                    onClick={saveCredentials}
-                  >
-                    {busy ? 'Connecting…' : 'Connect ESPN account'}
-                  </button>
-                  {!isMobile && (
-                    <button className="btn sm" onClick={() => setShowExtension((v) => !v)}>
-                      Use the browser extension instead
-                    </button>
-                  )}
-                </div>
+                <button
+                  className="btn primary"
+                  disabled={busy || !swid.trim() || !s2.trim()}
+                  onClick={saveCredentials}
+                >
+                  {busy ? 'Connecting…' : 'Connect ESPN account'}
+                </button>
 
                 <details className="small" style={{ marginTop: 12 }}>
-                  <summary>Where do I find these?</summary>
-                  <p>
-                    On a desktop browser, sign in at espn.com, open DevTools (F12)
-                    → Application → Cookies → <code>espn.com</code>, and copy{' '}
-                    <code>SWID</code> and <code>espn_s2</code>.
-                  </p>
+                  <summary>Where do I find these? (desktop)</summary>
+                  <ol className="tiny">
+                    <li>Sign in at espn.com and open your league.</li>
+                    <li>Press F12 → <strong>Application</strong> tab.</li>
+                    <li>Storage → Cookies → <code>espn.com</code>.</li>
+                    <li>
+                      Copy the <strong>Value</strong> of <code>SWID</code> (keep the
+                      braces) and <code>espn_s2</code> (a long string — copy it
+                      exactly, do not decode or trim it).
+                    </li>
+                  </ol>
                   <p className="tiny faint">
-                    <code>espn_s2</code> is an HttpOnly cookie, so no bookmarklet
-                    or page script can read it, and phone browsers have no
-                    DevTools to read it from. That is a browser security
-                    boundary, not something this app can work around.
+                    <code>espn_s2</code> is HttpOnly, so phone browsers cannot read
+                    it and no bookmarklet can — this path needs a desktop once.
+                    Full runbook: <code>docs/espn-connection-backup.md</code>.
                   </p>
                 </details>
-
-                {showExtension && !isMobile && (
-                  <div className="connect-panel inset">
-                    <h4>Browser extension (desktop only)</h4>
-                    <p className="small">
-                      Not published to any store — it ships in this repository at{' '}
-                      <code>browser-extension/</code>. Load it at{' '}
-                      <code>chrome://extensions</code> (Developer mode → Load
-                      unpacked), open your ESPN league, and click it. Generate a
-                      pairing code here and type it into the extension once.
-                    </p>
-                    <p className="tiny faint">
-                      It saves copying a 300-character cookie by hand. Chrome and
-                      Edge on desktop only — mobile browsers do not run
-                      extensions.
-                    </p>
-                    <button className="btn sm" onClick={generateCode} disabled={busy}>
-                      Generate pairing code
-                    </button>
-                    {pairing && (
-                      <p className="pairing-code">
-                        <code>{pairing.code}</code>
-                        <span className="tiny faint">
-                          {' '}
-                          single use · expires in{' '}
-                          {Math.round(pairing.expires_in_seconds / 60)} min
-                        </span>
-                      </p>
-                    )}
-                  </div>
-                )}
-              </>
+              </div>
             )}
           </div>
         )}
