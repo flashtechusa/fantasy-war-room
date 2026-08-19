@@ -1,11 +1,12 @@
 # Product direction
 
 Decisions made in conversation, written down so they survive it. This is the
-intended shape of the product, not a description of what is built — see
-`TODO.md` for the gap.
+intended shape of the product *and* a snapshot of what backs it in code today.
+Where the two differ, it says so — see `TODO.md` for the running gap.
 
-Nothing here is built yet. The app today is single-tenant and read-only
-against ESPN.
+Status in one line: the platform (accounts, per-user encrypted ESPN
+connections, import, live-draft sync) is **built and multi-tenant**. The
+season-long **alerts** — the thing being sold — are **not built yet**.
 
 ---
 
@@ -36,6 +37,26 @@ This is a deliberate constraint, not a missing feature:
 Worst case for a wrong alert is the user ignores it. That asymmetry is the
 whole reason for the design.
 
+## What's built today
+
+A snapshot, so a future session doesn't re-derive it or contradict it.
+
+| Area | State |
+|---|---|
+| Multi-user accounts, invite-only, roles (owner / partner / client) | **Built** — `User`, `AuthSession`, owner-created accounts, admin console |
+| Per-user ESPN connection, isolated between accounts | **Built** — `UserEspnConfig`, resolved per signed-in user |
+| ESPN cookies encrypted at rest (Fernet, key outside the DB) | **Built** — `services/secrets.py` |
+| Cookie redaction from logs, errors, and API responses | **Built** — `espn/redaction.py`, filter on the root logger |
+| Connect ESPN flow: discover leagues → confirm rules → import | **Built** — `services/espn_connect.py`, `ConnectEspn.tsx` |
+| League discovery from the ESPN fan profile | **Built** — `espn/discovery.py` |
+| Public-league import with no credentials | **Built** |
+| Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
+| Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
+| Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
+| Verified vs unverified team ownership | **Model decided, enforcement NOT done** — see below |
+| Season-long alerts | **Not built** — the design below is the plan |
+| Billing | **Not built, and last on purpose** |
+
 ## Accounts and access
 
 Payment happens on Fiverr, outside the app entirely. No Stripe, no card data,
@@ -59,26 +80,129 @@ When an account is off, paywall the screens but **keep the data**. Their league
 history is the reason they come back, and forcing a re-import is the friction
 that stops them.
 
-## Credentials
+---
+
+## ESPN connection model
+
+The central design problem, and where most of the recent work went. ESPN has no
+OAuth, no API key, and no read-only token. Private leagues require two session
+cookies (`SWID`, `espn_s2`); `espn_s2` is `HttpOnly`, so it cannot be read by
+any page script, on any device. Everything below follows from that one fact.
+
+### Two trust levels
+
+The public/private split is not just a capability split — it is a **trust**
+split, and the product should treat it as one.
+
+| Level | How connected | What it proves |
+|---|---|---|
+| **Unverified** | Public league, league id only, no credentials | We can read the league. We do **not** know the user is in it, or which team is theirs. Team choice is a self-assertion. |
+| **Verified** | Private league, authenticated cookies | The `SWID` proves the ESPN account, and matching it to an owner id proves which team is theirs. |
+
+This matters the moment two people share a league in the app: an unverified
+connection must never be treated as proof of team ownership.
+
+### Connection lanes, by case
+
+| Case | Path | Verified? |
+|---|---|---|
+| Public league, any device | League URL or id → anonymous import → user picks team | Unverified |
+| Public league, mobile | **Share → Fantasy War Room** hands the app the ESPN URL; it extracts the league id — no typing | Unverified |
+| Private league, desktop | Chrome/Edge extension captures cookies | Verified |
+| Private league, Android phone | An extension-capable browser (Firefox for Android) is a workable phone-only fallback | Verified |
+| Private league, iPhone | **Native app required** — no browser path exists (see dead ends) | Verified |
+| Any private league | Manual cookie paste from desktop DevTools | Verified |
+
+The **Share → Fantasy War Room** target is the next concrete build for the
+public lane: register the PWA as an iOS share target so a user on an ESPN page
+taps Share and the app receives the URL. It removes the last manual step on the
+one lane that already works phone-only.
+
+### Server-side ownership enforcement (required, not yet done)
+
+Verified team ownership must be **bound to the signed-in account on the
+backend**. Changing a frontend `team_id` must never let one user impersonate
+another manager.
+
+**Current gap:** `espn_connect.select_league` validates that a submitted
+`team_id` is *in the league*, but does **not** verify it belongs to the user's
+`SWID`. An explicit `team_id` overrides SWID detection with no ownership check,
+and public leagues have no SWID to check against. So today a signed-in user can
+claim any team in a league they can read.
+
+**Requirement:** for a verified (private) connection, the server must reject a
+`team_id` whose owner ids do not include the connecting account's `SWID`, unless
+the user is deliberately marking the connection unverified. For an unverified
+(public) connection, the team is a self-assertion and must be labelled as such
+everywhere it is shown — never used as an authorisation fact.
+
+### Dead ends — do not re-investigate
+
+Each of these cost real time to rule out. They are closed; a future session
+should not reopen them without new evidence.
+
+- **Bookmarklet / page script reading `espn_s2`.** Impossible — the cookie is
+  `HttpOnly`. Confirmed repeatedly.
+- **`consentToken` for auth.** It is a cookie-consent token, not a session
+  credential. Returns 401 against the league API. Useless.
+- **Browser-side bearer-token experiments.** A OneID `access_token` is not kept
+  in ESPN web-client storage, and cross-origin `Authorization` requests are
+  blocked by CORS before ESPN sees them. The browser cannot settle whether the
+  backend accepts bearer auth. (`scratch/espn_auth_matrix.py` can, from a
+  desktop with a real token — but only pursue it if a working bearer flow would
+  materially improve mobile onboarding, which it would not: even if the backend
+  accepted bearer, obtaining the token on an iPhone is itself unsolved.)
+- **iOS Safari Web Extension reading `espn_s2`.** Apple states `browser.cookies`
+  cannot read HttpOnly cookies in a Safari Web Extension. Documented in
+  `espn-connection.md`. **If that limitation is ever shown to be wrong, the
+  iPhone-private lane reopens** — it is the single assumption that pins that
+  case to "native required."
+
+### Credentials handling
 
 Each client connects their **own** ESPN account. The app is sold to clients,
-not operated on their behalf — the drafter is the distribution channel.
+not operated on their behalf — the drafter is the distribution channel. Routing
+everything through the drafter's login was considered and rejected: he logs in
+*as* the client rather than using co-manager, so it would mean storing many
+people's account credentials for a workflow that violates ESPN's terms on
+account sharing. Each user authorising their own account is both safer and
+unremarkable.
 
-This matters. The alternative considered was routing everything through the
-drafter's credentials, which fails because he does not use ESPN's co-manager
-feature; he logs in as the client. Building a product on shared logins would
-mean storing many people's account credentials for a workflow that violates
-ESPN's terms on account sharing. Each user authorising their own account is
-both safer and unremarkable.
+The security posture, all **built**:
 
-Read-only still needs `espn_s2` for private leagues — ESPN has no read-only
-token. So credentials must be **encrypted at rest** before anyone other than
-the owner uses this. That is a hard prerequisite, not a nice-to-have.
+- Cookies are encrypted at rest with a key held outside the database.
+- No endpoint returns a cookie value; status is reported as set/unset only.
+- A redaction filter keeps cookies out of logs and error messages, including
+  those emitted by third-party libraries.
+- **Disconnect ESPN** deletes the stored credentials outright.
+
+A cross-origin data-shipping bookmarklet — logic hosted on our domain, injected
+into an ESPN page, POSTing league *data* (never the cookie) to the backend — is
+a viable future option where the credential never leaves ESPN at all. Not built;
+noted because it is the strongest privacy story of any path and the one most
+"website-shaped."
+
+---
+
+## Live draft
+
+Manual pick entry is the primary path: it needs no cookies and cannot be broken
+by ESPN changing an endpoint mid-draft. ESPN sync is an optional overlay that
+only ever *adds* picks.
+
+The one real finding from studying other clients: `espn-api` returns **zero**
+picks during a live draft, because it gates on a "draft complete" flag ESPN does
+not set until the draft ends. So `live_draft_picks()` now reads `mDraftDetail`
+directly as well and takes whichever source reports more picks — additive, so it
+cannot regress the library path. Full reasoning and the endpoint comparison are
+in `espn-api-comparison.md`. `FWR_ESPN_DRAFT_SOURCE` pins the behaviour if
+needed.
 
 ## The alerts
 
-Timed off each league's real settings, which are already imported
-(`waiver_process_days`, scoring, roster slots) rather than a generic schedule.
+**Not built yet — this is the design.** Timed off each league's real settings,
+which are already imported (`waiver_process_days`, scoring, roster slots) rather
+than a generic schedule.
 
 | Alert | When | Why it earns a notification |
 |---|---|---|
@@ -96,16 +220,22 @@ Apple developer account, no SMS bill. Email as the fallback.
   one thing; charging for access is a different posture and they can cut it off.
 - **Single point of failure.** If ESPN changes that API mid-season, every
   customer breaks the same morning and the support call is ours.
+- **Team impersonation until ownership is enforced.** Until the server-side
+  check above lands, a signed-in user can claim a team that is not theirs. Real
+  today; must be closed before the app is used by more than one household.
 - **The free draft tier does not exist.** Letting a client watch their draft in
   real time is the one capability that failed in live use. If it is the hook,
   it has to be built and proven first.
 
 ## Order of work
 
-1. Running reliably on always-on hosting (in progress — Windows VPS)
-2. Alerts working for a single user, proven over a few weeks
-3. Accounts, roles, the on/off switch, credential encryption
-4. Anything sold to anyone
+1. Running reliably on always-on hosting (Windows VPS) — **in progress**
+2. Accounts, roles, the on/off switch, credential encryption — **built**
+3. ESPN connection: discovery, public/private, live-draft sync — **built**
+4. Server-side team-ownership enforcement — **next; a correctness/safety gap**
+5. Alerts working for a single user, proven over a few weeks — **the core
+   unbuilt feature**
+6. Anything sold to anyone — **last, on purpose**
 
-Billing-shaped work is last on purpose. It is worthless until there is
-something to sell and somewhere to sell it from.
+Billing-shaped work is last on purpose. It is worthless until there is something
+to sell and somewhere to sell it from.
