@@ -111,15 +111,21 @@ Offered in this order; all converge on the same stored `SWID` + `espn_s2`.
 |---|---|---|---|---|
 | 1 | **ESPN Email Code (OTP)** — primary | public + private | **any, incl. iPhone** | Verified |
 | 2 | Public League Link | public only | any | Unverified |
-| 3 | Browser Extension (PoC, dev-mode) | public + private | desktop Chrome/Edge | Verified |
-| 4 | Manual `SWID` + `espn_s2` | public + private | desktop (needs DevTools) | Verified |
+| 3 | Manual `SWID` + `espn_s2` | public + private | desktop (needs DevTools) | Verified |
 
 OTP is preferred even for public leagues, because it authenticates and so
 verifies team ownership, which the public link cannot. The rest are fallbacks in
 that order, and manual is **permanent** — it depends on nothing but a desktop
 browser, so it is the floor under everything else. The full user-facing
-procedure for all four, and what to do when one breaks, is the runbook
+procedure for all three, and what to do when one breaks, is the runbook
 `espn-connection-backup.md`.
+
+The **browser extension is not offered as a UI option.** It exists only as a
+developer-mode proof-of-concept (`browser-extension/`), not something a user can
+install, so presenting it in the connect screen would be a promise the product
+cannot keep. The backend pairing endpoint remains for maintainers who load it
+unpacked; it is documented in the runbook as a developer backup, not a user
+method.
 
 **OTP changes the iPhone-private story.** That case previously had no browser
 path and was marked "native app required". OTP connects a private league on an

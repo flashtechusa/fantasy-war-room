@@ -10,14 +10,9 @@
  * because no endpoint returns one.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  api,
-  type DiscoveredLeague,
-  type LeagueRules,
-  type PairingCode,
-} from '../api'
+import { api, type DiscoveredLeague, type LeagueRules } from '../api'
 import { Banner, Card, Loading } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -25,20 +20,7 @@ type Step = 'credentials' | 'pick-league' | 'confirm' | 'done'
 
 //: Credential-acquisition methods, in the order they are offered. They all
 //: converge on the same stored SWID + espn_s2 — only the acquisition differs.
-type Method = 'otp' | 'public' | 'extension' | 'manual'
-
-/**
- * Whether this is a phone or tablet.
- *
- * Used only to change what we *say*, never what we allow -- a desktop user who
- * trips this still gets every option. The point is that a phone user should be
- * told up front that a private league needs a laptop once, rather than
- * discovering it after hunting for DevTools that do not exist on iOS.
- */
-function isMobileBrowser(): boolean {
-  if (typeof navigator === 'undefined') return false
-  return /Android|iPhone|iPad|iPod|Mobile|Silk/i.test(navigator.userAgent)
-}
+type Method = 'otp' | 'public' | 'manual'
 
 function currentSeason(): number {
   // ESPN's season flips over in the spring; before that, last year's league is
@@ -171,11 +153,9 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
   const [rules, setRules] = useState<LeagueRules | null>(null)
   const [teamId, setTeamId] = useState<number | null>(null)
   const [autoDetected, setAutoDetected] = useState(false)
-  const [pairing, setPairing] = useState<PairingCode | null>(null)
   const [method, setMethod] = useState<Method>('otp')
   const [methodPinned, setMethodPinned] = useState(false)
   const [autoAdvanced, setAutoAdvanced] = useState(false)
-  const isMobile = useMemo(isMobileBrowser, [])
 
   // OTP (ESPN Email Code) — the primary method.
   const [email, setEmail] = useState('')
@@ -344,16 +324,10 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
     setLeagues([])
     setChosen(null)
     setRules(null)
-    setPairing(null)
     setStep('credentials')
     setNotice('ESPN disconnected. Stored credentials were deleted.')
     status.reload()
     onChange?.()
-  }
-
-  async function generateCode() {
-    const code = await run(() => api.createPairingCode())
-    if (code) setPairing(code)
   }
 
   if (status.loading) return <Loading what="connection status" />
@@ -419,16 +393,6 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
               >
                 <span>Public League Link</span>
               </button>
-              {!isMobile && (
-                <button
-                  role="tab"
-                  aria-selected={method === 'extension'}
-                  className={`method-tab${method === 'extension' ? ' active' : ''}`}
-                  onClick={() => chooseMethod('extension')}
-                >
-                  <span>Browser Extension</span>
-                </button>
-              )}
               <button
                 role="tab"
                 aria-selected={method === 'manual'}
@@ -575,37 +539,12 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
               </div>
             )}
 
-            {/* 3 — Browser extension: desktop backup, developer-mode only. */}
-            {method === 'extension' && !isMobile && (
-              <div className="connect-panel">
-                <Banner kind="info">
-                  Backup method. A proof-of-concept extension, not published to any
-                  store — Chrome/Edge on desktop, loaded in Developer mode.
-                </Banner>
-                <p className="small">
-                  Load <code>browser-extension/</code> at{' '}
-                  <code>chrome://extensions</code> (Developer mode → Load unpacked),
-                  open your ESPN league, and click it. Generate a pairing code here
-                  and type it into the extension once. It reads ESPN's cookies and
-                  sends them straight to this server.
-                </p>
-                <button className="btn sm" onClick={generateCode} disabled={busy}>
-                  Generate pairing code
-                </button>
-                {pairing && (
-                  <p className="pairing-code">
-                    <code>{pairing.code}</code>
-                    <span className="tiny faint">
-                      {' '}
-                      single use · expires in{' '}
-                      {Math.round(pairing.expires_in_seconds / 60)} min
-                    </span>
-                  </p>
-                )}
-              </div>
-            )}
+            {/* The browser-extension method is intentionally not offered here:
+                it is a developer-mode proof-of-concept, not something a user can
+                install, so it stays a maintainer backup (see the connection
+                runbook) rather than a UI option. The pairing endpoint remains. */}
 
-            {/* 4 — Manual: the permanent last resort, always available. */}
+            {/* Manual: the permanent last resort, always available. */}
             {method === 'manual' && (
               <div className="connect-panel">
                 <Banner kind="info">

@@ -10,12 +10,16 @@ Every method below ends in the **same place**: the app stores two ESPN cookies,
 team detection, import, draft sync, disconnect) runs on the one shared ESPN
 layer. The methods differ only in how those two cookies are obtained.
 
-Connection methods, in the order the app offers them:
+Connection methods the app offers, in order:
 
 1. [ESPN Email Code (OTP)](#1-espn-email-code-otp--primary) — primary
 2. [Public League Link](#2-public-league-link--fallback) — fallback
-3. [Browser Extension](#3-browser-extension--desktop-backup) — desktop backup
-4. [Manual SWID + espn_s2](#4-manual-swid--espn_s2--permanent-last-resort) — permanent last resort
+3. [Manual SWID + espn_s2](#4-manual-swid--espn_s2--permanent-last-resort) — permanent last resort
+
+And one method the app does **not** show a user, kept for maintainers only:
+
+- [Browser Extension](#3-browser-extension--desktop-backup) — developer-mode
+  proof-of-concept, loaded unpacked; not installable, so it is not a UI option.
 
 > Screenshots to add later are flagged `[SCREENSHOT: ...]`. They are not required
 > to follow the steps, but will help less technical users.
