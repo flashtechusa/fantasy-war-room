@@ -50,7 +50,7 @@ A snapshot, so a future session doesn't re-derive it or contradict it.
 | Connect ESPN flow: discover leagues → confirm rules → import | **Built** — `services/espn_connect.py`, `ConnectEspn.tsx` |
 | League discovery from the ESPN fan profile | **Built** — `espn/discovery.py` |
 | Public-league import with no credentials | **Built** |
-| ESPN Email Code (OTP) connect — the primary method | **Built and proven live** (real account → code → private league HTTP 200, 4 teams). One variable left: the server-side VPS origin — see below |
+| ESPN Email Code (OTP) connect — the primary method | **Built and proven live, including from production** (real account → code → private league imported, team auto-identified as Verified, Disney calls originating from the VPS) — see below |
 | Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
 | Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
 | Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
@@ -136,12 +136,13 @@ emailed code, ending in `SWID` + `espn_s2` that read the private test league
 the observed responses exactly. Native drops from "required" to a reliability
 fallback.
 
-The one variable not yet exercised: that live run originated from a *desktop*
-IP. Production makes these calls **server-side from the Windows VPS** (a
-datacenter IP), and Disney's risk scoring *could* treat that differently. To
-confirm, run `scripts/test_espn_otp.py` on the VPS itself; a green run there
-closes it. Low-volume account recovery is not usually IP-gated, so this is a
-check, not an expected failure. The **Share → Fantasy War Room** iOS share target is still worth
+This has now also been **exercised from production** — the VPS makes the Disney
+calls **server-side from a datacenter IP**, which was the one variable the
+desktop run left open. A real account connected through the deployed Connect
+ESPN screen: emailed code → `SWID` + `espn_s2` → the private league imported,
+with the user's team auto-identified and shown Verified. Disney accepted the
+flow from the datacenter IP, so the "Experimental" caveat has been dropped from
+the UI. The **Share → Fantasy War Room** iOS share target is still worth
 building, but now as a convenience on the #2 fallback rather than the mobile
 answer.
 

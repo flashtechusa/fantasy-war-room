@@ -406,12 +406,6 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
             {/* 1 — ESPN Email Code (OTP): the primary method. */}
             {method === 'otp' && (
               <div className="connect-panel">
-                <Banner kind="warn">
-                  <strong>Experimental.</strong> New, and not yet proven against
-                  ESPN live. If it does not work, use Public League Link or Manual
-                  below — those are stable.
-                </Banner>
-
                 {!otpAvailable ? (
                   <p className="small">
                     ESPN Email Code is not enabled on this server yet. Use{' '}
@@ -560,6 +554,25 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
                   signing out of ESPN invalidates them at source.
                 </p>
 
+                <details className="small" style={{ marginBottom: 12 }}>
+                  <summary>Where do I find these? (desktop)</summary>
+                  <ol className="tiny">
+                    <li>Sign in at espn.com and open your league.</li>
+                    <li>Press F12 → <strong>Application</strong> tab.</li>
+                    <li>Storage → Cookies → <code>espn.com</code>.</li>
+                    <li>
+                      Copy the <strong>Value</strong> of <code>SWID</code> (keep the
+                      braces) and <code>espn_s2</code> (a long string — copy it
+                      exactly, do not decode or trim it).
+                    </li>
+                  </ol>
+                  <p className="tiny faint">
+                    <code>espn_s2</code> is HttpOnly, so phone browsers cannot read
+                    it and no bookmarklet can — this path needs a desktop once.
+                    Full runbook: <code>docs/espn-connection-backup.md</code>.
+                  </p>
+                </details>
+
                 <label htmlFor="connect-swid">SWID cookie</label>
                 <input
                   id="connect-swid"
@@ -597,25 +610,6 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
                 >
                   {busy ? 'Connecting…' : 'Connect ESPN account'}
                 </button>
-
-                <details className="small" style={{ marginTop: 12 }}>
-                  <summary>Where do I find these? (desktop)</summary>
-                  <ol className="tiny">
-                    <li>Sign in at espn.com and open your league.</li>
-                    <li>Press F12 → <strong>Application</strong> tab.</li>
-                    <li>Storage → Cookies → <code>espn.com</code>.</li>
-                    <li>
-                      Copy the <strong>Value</strong> of <code>SWID</code> (keep the
-                      braces) and <code>espn_s2</code> (a long string — copy it
-                      exactly, do not decode or trim it).
-                    </li>
-                  </ol>
-                  <p className="tiny faint">
-                    <code>espn_s2</code> is HttpOnly, so phone browsers cannot read
-                    it and no bookmarklet can — this path needs a desktop once.
-                    Full runbook: <code>docs/espn-connection-backup.md</code>.
-                  </p>
-                </details>
               </div>
             )}
           </div>
