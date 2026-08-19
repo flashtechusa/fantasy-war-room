@@ -231,11 +231,14 @@ Email Code or Manual, which authenticate.
 ### Confirming which ESPN account / team was detected
 
 After connecting, the connect flow shows the discovered leagues and, for each,
-the team it matched to your `SWID` ("Your team: …"). If the wrong team is shown
-for a verified (Email Code / Manual) connection, pick the correct one on the
-confirm step — but note that for a **public** (unverified) connection the team
-is a self-assertion and is labelled Unverified, so it is never treated as proof
-of ownership.
+the team it matched to your `SWID` ("Your team: …"). For a verified (Email Code
+/ Manual) connection the team is **locked to the ESPN account** and cannot be
+changed on the confirm step — the server assigns it and rejects any other
+`team_id`. If it shows the wrong team, the ESPN account you connected genuinely
+owns that team; connect the account that owns the team you want. For a
+**public** (unverified) connection there is no `SWID` to match, so the team is a
+self-assertion you pick by hand and is labelled Unverified — never treated as
+proof of ownership.
 
 ---
 

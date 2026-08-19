@@ -580,6 +580,8 @@ export interface EspnConnectionStatus {
   espn_league_id: number | null
   espn_season: number | null
   my_team_id: number | null
+  /** True only when ESPN's owner ids matched this account's SWID to the team. */
+  verified?: boolean
   updated_at?: string | null
   can_discover: boolean
   manual_entry_available?: boolean
@@ -755,6 +757,7 @@ export const api = {
       league: DiscoveredLeague
       rules: LeagueRules
       my_team_id: number | null
+      verified: boolean
       team_auto_detected: boolean
     }>('/api/espn/select', { method: 'POST', body: JSON.stringify(body) }),
 

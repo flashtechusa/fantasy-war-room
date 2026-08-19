@@ -754,6 +754,7 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
             <select
               id="connect-team"
               value={teamId ?? ''}
+              disabled={autoDetected}
               onChange={(event) =>
                 setTeamId(event.target.value ? Number(event.target.value) : null)
               }
@@ -768,8 +769,11 @@ export default function ConnectEspn({ onChange }: { onChange?: () => void }) {
             </select>
             <p className="tiny faint">
               {autoDetected
-                ? 'Detected from your ESPN account. Change it if that is wrong.'
-                : 'Your ESPN id did not match an owner in this league — pick your team.'}
+                ? 'ESPN confirms this is your team, so it is locked in — verified ' +
+                  'ownership. If it is wrong, the ESPN account you connected owns a ' +
+                  'different team.'
+                : 'Your ESPN id did not match an owner in this league, so this team ' +
+                  'is an unverified self-assertion — pick the one that is yours.'}
             </p>
 
             <RulesReview rules={rules} league={chosen} />

@@ -54,7 +54,7 @@ A snapshot, so a future session doesn't re-derive it or contradict it.
 | Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
 | Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
 | Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
-| Verified vs unverified team ownership | **Model decided, enforcement NOT done** — see below |
+| Verified vs unverified team ownership | **Built** — `select_league` binds a verified team to the account's SWID server-side and rejects overrides; see below |
 | Season-long alerts | **Not built** — the design below is the plan |
 | Billing | **Not built, and last on purpose** |
 
@@ -139,23 +139,28 @@ check, not an expected failure. The **Share → Fantasy War Room** iOS share tar
 building, but now as a convenience on the #2 fallback rather than the mobile
 answer.
 
-### Server-side ownership enforcement (required, not yet done)
+### Server-side ownership enforcement (built)
 
-Verified team ownership must be **bound to the signed-in account on the
-backend**. Changing a frontend `team_id` must never let one user impersonate
-another manager.
+Verified team ownership is **bound to the signed-in account on the backend**.
+Changing a frontend `team_id` cannot let one user impersonate another manager.
 
-**Current gap:** `espn_connect.select_league` validates that a submitted
-`team_id` is *in the league*, but does **not** verify it belongs to the user's
-`SWID`. An explicit `team_id` overrides SWID detection with no ownership check,
-and public leagues have no SWID to check against. So today a signed-in user can
-claim any team in a league they can read.
+**How it works now** (`espn_connect.select_league`):
 
-**Requirement:** for a verified (private) connection, the server must reject a
-`team_id` whose owner ids do not include the connecting account's `SWID`, unless
-the user is deliberately marking the connection unverified. For an unverified
-(public) connection, the team is a self-assertion and must be labelled as such
-everywhere it is shown — never used as an authorisation fact.
+- When the connection is **authenticated** (cookies present) and ESPN's owner
+  ids match the account's `SWID` to a team, that team is assigned automatically
+  and the connection is recorded `verified = True`. A submitted `team_id` that
+  disagrees is **rejected** (HTTP 400) — the client cannot override it.
+- When there is **no SWID match** — a public/anonymous connection, or an
+  authenticated one whose `SWID` owns no team (someone else set the team up) —
+  the team is a self-assertion: the submitted `team_id` is accepted but the
+  connection is recorded `verified = False`.
+
+The `verified` flag is persisted on `UserEspnConfig` and surfaced by
+`GET /api/espn/status`, so every screen can label an unverified team as a
+self-assertion rather than treating it as proof of ownership. The connect UI
+locks the team selector once ESPN has confirmed ownership. The column is added
+to existing databases automatically on startup (`db._ensure_added_columns`),
+since `create_all` never alters a table that already exists.
 
 ### Dead ends — do not re-investigate
 
@@ -241,9 +246,11 @@ Apple developer account, no SMS bill. Email as the fallback.
   one thing; charging for access is a different posture and they can cut it off.
 - **Single point of failure.** If ESPN changes that API mid-season, every
   customer breaks the same morning and the support call is ours.
-- **Team impersonation until ownership is enforced.** Until the server-side
-  check above lands, a signed-in user can claim a team that is not theirs. Real
-  today; must be closed before the app is used by more than one household.
+- **Team impersonation on unverified connections.** Closed for verified
+  (authenticated) connections — the server binds the team to the account's
+  `SWID` and rejects overrides. A **public** connection is still a
+  self-assertion by design; it is labelled Unverified and must never be used as
+  an authorisation fact.
 - **The free draft tier does not exist.** Letting a client watch their draft in
   real time is the one capability that failed in live use. If it is the hook,
   it has to be built and proven first.
@@ -253,7 +260,7 @@ Apple developer account, no SMS bill. Email as the fallback.
 1. Running reliably on always-on hosting (Windows VPS) — **in progress**
 2. Accounts, roles, the on/off switch, credential encryption — **built**
 3. ESPN connection: discovery, public/private, live-draft sync — **built**
-4. Server-side team-ownership enforcement — **next; a correctness/safety gap**
+4. Server-side team-ownership enforcement — **built**
 5. Alerts working for a single user, proven over a few weeks — **the core
    unbuilt feature**
 6. Anything sold to anyone — **last, on purpose**

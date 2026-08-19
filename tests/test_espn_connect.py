@@ -208,23 +208,76 @@ class TestSelection:
         ).json()
         assert body["my_team_id"] == 5
         assert body["team_auto_detected"] is True
+        # ESPN's owner id matched the SWID, so this is a verified connection.
+        assert body["verified"] is True
 
-    def test_an_explicit_team_wins_over_detection(self, client, espn_stub):
+    def test_an_authenticated_user_cannot_claim_a_different_team(self, client, espn_stub):
+        """The core ownership rule: ESPN says team 5 is yours, so team 9 is refused.
+
+        A signed-in user must never be able to override the SWID-detected team
+        by posting another team_id -- that would let one manager impersonate
+        another in a shared league.
+        """
+        espn_stub.leagues = {111: league_payload(111, "Test", my_team=5)}
+        connect_credentials(client)
+        response = client.post(
+            "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 9}
+        )
+        assert response.status_code == 400
+        assert "different team" in response.json()["detail"].lower()
+
+    def test_posting_the_detected_team_id_is_accepted(self, client, espn_stub):
+        """Submitting the *same* team the SWID owns is fine -- it just agrees."""
         espn_stub.leagues = {111: league_payload(111, "Test", my_team=5)}
         connect_credentials(client)
         body = client.post(
-            "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 9}
+            "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 5}
         ).json()
-        assert body["my_team_id"] == 9
-        assert body["team_auto_detected"] is False
+        assert body["my_team_id"] == 5
+        assert body["verified"] is True
+
+    def test_the_detected_team_is_bound_even_when_the_db_is_inspected(
+        self, client, espn_stub
+    ):
+        """The rejection is enforced server-side, not just in the response body."""
+        espn_stub.leagues = {111: league_payload(111, "Test", my_team=5)}
+        connect_credentials(client)
+        client.post(
+            "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 9}
+        )
+        from app.db import session_scope
+        from app.models import UserEspnConfig
+
+        with session_scope() as session:
+            config = session.query(UserEspnConfig).one()
+            # The rejected team_id never lands; nothing was selected.
+            assert config.my_team_id is None
+            assert config.espn_league_id is None
 
     def test_a_team_that_is_not_in_the_league_is_rejected(self, client, espn_stub):
-        espn_stub.leagues = {111: league_payload(111, "Test", size=10)}
+        # No SWID match here (my_team=None), so it takes the self-assertion path,
+        # where an out-of-league team is still refused.
+        espn_stub.leagues = {111: league_payload(111, "Test", size=10, my_team=None)}
         connect_credentials(client)
         response = client.post(
             "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 40}
         )
         assert response.status_code == 400
+
+    def test_an_authenticated_user_whose_swid_owns_no_team_may_self_assert(
+        self, client, espn_stub
+    ):
+        """Cookies present but the SWID matches no owner (someone else set the
+        team up). The team becomes a self-assertion -- allowed, but unverified.
+        """
+        espn_stub.leagues = {111: league_payload(111, "Test", my_team=None)}
+        connect_credentials(client)
+        body = client.post(
+            "/api/espn/select", json={"league_id": 111, "season": 2026, "team_id": 4}
+        ).json()
+        assert body["my_team_id"] == 4
+        assert body["verified"] is False
+        assert body["team_auto_detected"] is False
 
     def test_selection_is_persisted_against_this_user(self, client, espn_stub):
         espn_stub.leagues = {111: league_payload(111, "Test", my_team=5)}
@@ -234,6 +287,7 @@ class TestSelection:
         assert status["connected"] is True
         assert status["espn_league_id"] == 111
         assert status["my_team_id"] == 5
+        assert status["verified"] is True
 
     def test_import_refuses_before_a_league_is_chosen(self, client, espn_stub):
         connect_credentials(client)
@@ -361,6 +415,8 @@ class TestPublicLeagues:
         assert selected["my_team_id"] == 4
         # Nothing to auto-detect without a SWID, so the team is a manual choice.
         assert selected["team_auto_detected"] is False
+        # And a self-asserted team on a public league is never verified.
+        assert selected["verified"] is False
 
     def test_selecting_a_public_league_stores_no_credentials(self, client, espn_stub):
         espn_stub.leagues = {555: league_payload(555, "Open League")}
@@ -368,6 +424,8 @@ class TestPublicLeagues:
         state = client.get("/api/espn/status").json()
         assert state["espn_league_id"] == 555
         assert state["credentials_stored"] is False
+        # A public connection is unverified: its team is a self-assertion.
+        assert state["verified"] is False
 
     def test_listing_leagues_without_a_league_id_or_cookies_is_a_409(
         self, client, espn_stub

@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -66,8 +66,36 @@ def get_session_factory() -> sessionmaker[Session]:
     return _SessionLocal
 
 
+#: Columns added to existing tables after their first release. `create_all`
+#: creates missing *tables* but never alters existing ones, so a column added
+#: to a table that already exists in a deployed database has to be filled in by
+#: hand. Each entry is nullable with no default, so the ALTER is portable
+#: across SQLite and Postgres and existing rows simply read as the falsy
+#: default until they are next written.
+_ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "user_espn_config": {"verified": "BOOLEAN"},
+}
+
+
+def _ensure_added_columns(engine: Engine) -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    for table, columns in _ADDED_COLUMNS.items():
+        if table not in existing_tables:
+            # create_all just made it with every column present.
+            continue
+        present = {col["name"] for col in inspector.get_columns(table)}
+        for name, ddl_type in columns.items():
+            if name in present:
+                continue
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}"))
+
+
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    engine = get_engine()
+    Base.metadata.create_all(bind=engine)
+    _ensure_added_columns(engine)
 
 
 def reset_engine() -> None:
