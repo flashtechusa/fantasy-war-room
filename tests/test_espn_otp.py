@@ -19,7 +19,6 @@ from app.services import espn_otp
 
 from test_espn_discovery import MY_SWID, league_payload
 
-API_KEY = "test-oneid-api-key"
 EMAIL = "stephen@example.com"
 S2 = "AEB" + "x9Kq2Lm" * 30
 
@@ -30,33 +29,81 @@ S2 = "AEB" + "x9Kq2Lm" * 30
 
 
 class FakeDisney:
-    """Configurable stand-in for registerdisney. Records what it received."""
+    """Stand-in for registerdisney, matching the observed HAR contract.
+
+    The four real endpoints and their real request/response keys:
+      1 /guest/recovery-methods     {loginValue}   -> data.recoveryMethods[]
+      2 /notification/otp/recovery  {lookupValue}  -> data.sessionId
+      3 /otp/redeem                 {passcode,     -> data.swid,
+                                      sessionIds}      data.recoveryToken.access_token
+      4 /guest/login/recoveryToken  {swid,         -> data.s2, data.profile.swid
+                                      recoveryToken}
+    """
 
     def __init__(self) -> None:
         self.requests: list[httpx.Request] = []
+        self.bodies: list[dict] = []
         self.otp_ok = True
-        #: What the redeem step "sets" -- SWID as a token claim, espn_s2 as a
-        #: Set-Cookie, which is the shape the real flow is expected to use.
-        self.redeem_swid = MY_SWID
-        self.redeem_s2 = S2
+        self.has_account = True
+        #: What the final login exchange returns.
+        self.login_s2 = S2
+        self.profile_swid = MY_SWID
+        #: What redeem returns; step 4 validates these agree with the profile.
+        self.redeemed_swid = MY_SWID
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        try:
+            body = json.loads(request.content or b"{}")
+        except ValueError:
+            body = {}
+        self.bodies.append(body)
         path = request.url.path
-        if path.endswith("/guest-flow"):
-            return httpx.Response(200, json={"data": {"flowToken": "flow-123"}})
+
+        if path.endswith("/guest/recovery-methods"):
+            methods = (
+                [{"id": "e1", "type": "EMAIL", "mask": "s***@e***.com"}]
+                if self.has_account
+                else []
+            )
+            return httpx.Response(200, json={"data": {"recoveryMethods": methods}})
+
         if path.endswith("/notification/otp/recovery"):
-            return httpx.Response(200, json={"data": {"otpSession": "otp-abc"}})
+            return httpx.Response(
+                200,
+                json={"data": {"sessionId": "sess-1", "broadcastId": "bc-1",
+                               "expirationTime": 600}},
+            )
+
         if path.endswith("/otp/redeem"):
             if not self.otp_ok:
                 return httpx.Response(401, json={"error": {"code": "INVALID_OTP"}})
-            headers = {}
-            if self.redeem_s2:
-                headers["Set-Cookie"] = f"espn_s2={self.redeem_s2}; Path=/; HttpOnly"
-            body = {"data": {"token": {"access_token": "disney-token"}}}
-            if self.redeem_swid:
-                body["data"]["swid"] = self.redeem_swid
-            return httpx.Response(200, json=body, headers=headers)
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "access_token": "disney-access-token-value",
+                        "swid": self.redeemed_swid,
+                        "recoveryToken": {
+                            "access_token": "recovery-token-value",
+                            "swid": self.redeemed_swid,
+                            "identity_id": "identity-123",
+                        },
+                    }
+                },
+            )
+
+        if path.endswith("/guest/login/recoveryToken"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "s2": self.login_s2,
+                        "profile": {"swid": self.profile_swid},
+                        "token": {"access_token": "final-access-token"},
+                    }
+                },
+            )
         return httpx.Response(404, json={})
 
     @property
@@ -65,8 +112,8 @@ class FakeDisney:
 
 
 @pytest.fixture(autouse=True)
-def _oneid_key(monkeypatch):
-    monkeypatch.setenv("FWR_ESPN_ONEID_API_KEY", API_KEY)
+def _otp_enabled(monkeypatch):
+    monkeypatch.setenv("FWR_ESPN_OTP_ENABLED", "1")
     # Every test starts with an empty flow registry.
     espn_otp.registry._flows.clear()
     yield
@@ -75,17 +122,12 @@ def _oneid_key(monkeypatch):
 
 @pytest.fixture
 def disney(monkeypatch):
-    """Route every DisneyOneID through a FakeDisney, and stub the proof step.
-
-    The proof step calls the real discovery; here we point it at a mock ESPN so
-    the flow can complete without a network. The FakeDisney is returned for
-    assertions.
-    """
+    """Route every DisneyOneID through a FakeDisney matching the real contract."""
     fake = FakeDisney()
     real_init = oneid.DisneyOneID.__init__
 
-    def patched_init(self, api_key, timeout=15.0, transport=None):
-        real_init(self, api_key, timeout=timeout, transport=fake.transport)
+    def patched_init(self, timeout=15.0, transport=None):
+        real_init(self, timeout=timeout, transport=fake.transport)
 
     monkeypatch.setattr(oneid.DisneyOneID, "__init__", patched_init)
     return fake
@@ -97,61 +139,85 @@ def disney(monkeypatch):
 
 
 class TestDisneyOneID:
-    def test_the_four_steps_reduce_to_the_two_cookies(self, disney):
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
+    @staticmethod
+    def run_flow(fake) -> tuple[str, str]:
+        client = oneid.DisneyOneID()
+        client.recovery_methods(EMAIL)
         client.request_otp(EMAIL)
         client.submit_otp("123456")
-        swid, espn_s2 = client.establish_espn_session()
+        return client.establish_espn_session()
+
+    def test_the_four_steps_reduce_to_the_two_cookies(self, disney):
+        swid, espn_s2 = self.run_flow(disney)
         assert swid == MY_SWID.upper()
         assert espn_s2 == S2
 
-    def test_it_requires_an_api_key(self):
-        with pytest.raises(oneid.OneIDError, match="API key"):
-            oneid.DisneyOneID(api_key="")
-
-    def test_apikey_is_sent_on_every_call(self, disney):
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
-        client.request_otp(EMAIL)
+    def test_no_authorization_header_is_sent(self, disney):
+        """The real capture carried no APIKEY / bearer -- neither do we."""
+        self.run_flow(disney)
         for request in disney.requests:
-            assert request.headers.get("Authorization") == f"APIKEY {API_KEY}"
+            assert "Authorization" not in request.headers
 
-    def test_the_email_is_sent_to_disney_but_not_beyond(self, disney):
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
-        client.request_otp(EMAIL)
-        otp_request = disney.requests[-1]
-        assert EMAIL in otp_request.content.decode()  # goes TO Disney
-        # ...but never survives redaction on the way back out.
-        assert EMAIL not in oneid.redact(f"failed for {EMAIL}")
+    def test_the_steps_use_the_observed_request_keys(self, disney):
+        self.run_flow(disney)
+        by_path = {r.url.path.split("/")[-1]: b for r, b in zip(disney.requests, disney.bodies)}
+        assert "loginValue" in by_path["recovery-methods"]
+        assert "lookupValue" in by_path["recovery"]
+        redeem = by_path["redeem"]
+        assert "passcode" in redeem and isinstance(redeem["sessionIds"], list)
+        login = by_path["recoveryToken"]
+        assert "swid" in login and "recoveryToken" in login
 
-    def test_a_bad_otp_raises_a_redacted_error(self, disney):
+    def test_the_session_id_is_echoed_into_redeem(self, disney):
+        self.run_flow(disney)
+        redeem = next(b for r, b in zip(disney.requests, disney.bodies)
+                      if r.url.path.endswith("/otp/redeem"))
+        assert redeem["sessionIds"] == ["sess-1"]
+
+    def test_the_email_is_sent_to_disney_but_never_survives_redaction(self, disney):
+        client = oneid.DisneyOneID()
+        client.recovery_methods(EMAIL)
+        assert EMAIL in disney.requests[-1].content.decode()  # goes TO Disney
+        assert EMAIL not in oneid.redact(f"failed for {EMAIL}")  # not back out
+
+    def test_an_unknown_email_fails_early_and_clearly(self, disney):
+        disney.has_account = False
+        client = oneid.DisneyOneID()
+        with pytest.raises(oneid.OneIDError, match="no recovery method"):
+            client.recovery_methods(EMAIL)
+
+    def test_a_bad_otp_raises_at_the_redeem_step(self, disney):
         disney.otp_ok = False
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
+        client = oneid.DisneyOneID()
+        client.recovery_methods(EMAIL)
         client.request_otp(EMAIL)
         with pytest.raises(oneid.OneIDError) as excinfo:
             client.submit_otp("000000")
-            client.establish_espn_session()
         assert excinfo.value.step == "submit_otp"
 
-    def test_swid_from_a_token_claim_is_brace_wrapped(self, disney):
-        disney.redeem_swid = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"  # no braces
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
-        client.request_otp(EMAIL)
-        client.submit_otp("123456")
-        swid, _ = client.establish_espn_session()
+    def test_profile_swid_without_braces_is_wrapped(self, disney):
+        disney.profile_swid = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+        disney.redeemed_swid = "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d"
+        swid, _ = self.run_flow(disney)
         assert swid == "{1A2B3C4D-5E6F-7A8B-9C0D-1E2F3A4B5C6D}"
 
-    def test_a_session_missing_espn_s2_is_rejected(self, disney):
-        disney.redeem_s2 = ""  # SWID present, espn_s2 never set
-        client = oneid.DisneyOneID(api_key=API_KEY)
-        client.start_flow()
+    def test_a_login_missing_s2_is_rejected(self, disney):
+        disney.login_s2 = ""
+        client = oneid.DisneyOneID()
+        client.recovery_methods(EMAIL)
         client.request_otp(EMAIL)
         client.submit_otp("123456")
         with pytest.raises(oneid.OneIDError, match="espn_s2"):
+            client.establish_espn_session()
+
+    def test_a_mismatched_profile_and_redeemed_swid_is_refused(self, disney):
+        # The account that logged in is not the one whose code was redeemed.
+        disney.profile_swid = "{99999999-8888-7777-6666-555555555555}"
+        client = oneid.DisneyOneID()
+        client.recovery_methods(EMAIL)
+        client.request_otp(EMAIL)
+        client.submit_otp("123456")
+        with pytest.raises(oneid.OneIDError, match="did not match"):
             client.establish_espn_session()
 
 
@@ -196,12 +262,12 @@ def start(client, email: str = EMAIL):
 class TestOtpApi:
     def test_status_reports_otp_availability(self, client):
         body = client.get("/api/espn/status").json()
-        assert body["otp_available"] is True  # key set by the autouse fixture
+        assert body["otp_available"] is True  # on by default
         assert body["public_link_available"] is True
         assert body["manual_entry_available"] is True
 
-    def test_status_hides_otp_when_no_api_key(self, client, monkeypatch):
-        monkeypatch.delenv("FWR_ESPN_ONEID_API_KEY", raising=False)
+    def test_the_kill_switch_hides_otp(self, client, monkeypatch):
+        monkeypatch.setenv("FWR_ESPN_OTP_ENABLED", "0")
         assert client.get("/api/espn/status").json()["otp_available"] is False
 
     def test_start_sends_a_code_and_returns_a_flow(self, client, disney):
@@ -241,7 +307,8 @@ class TestOtpApi:
             assert MY_SWID not in text
             assert S2 not in text
             assert EMAIL not in text
-            assert "disney-token" not in text
+            assert "recovery-token-value" not in text
+            assert "final-access-token" not in text
 
     def test_a_wrong_code_is_a_400_not_a_500(self, client, disney):
         disney.otp_ok = False

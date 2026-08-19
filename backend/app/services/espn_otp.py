@@ -40,6 +40,7 @@ recovery context never touch the database and are never logged. Only the final
 from __future__ import annotations
 
 import logging
+import os
 import secrets
 import threading
 from dataclasses import dataclass, field
@@ -49,12 +50,8 @@ from enum import Enum
 import httpx
 
 from ..models import User
-from ..espn.oneid import (
-    DisneyOneID,
-    OneIDError,
-    api_key_from_env,
-    looks_like_email,
-)
+from ..espn.oneid import DisneyOneID, OneIDError, looks_like_email
+from ..espn.redaction import redact
 
 __all__ = [
     "OtpState",
@@ -63,16 +60,31 @@ __all__ = [
     "registry",
     "start_flow",
     "verify_code",
-    "api_key_from_env",
+    "otp_enabled",
     "FLOW_TTL",
 ]
-from ..espn.redaction import redact
 
 log = logging.getLogger(__name__)
 
 #: An unfinished flow is useless after this and holds a live Disney handle, so
 #: it is dropped promptly rather than lingering.
 FLOW_TTL = timedelta(minutes=10)
+
+
+def otp_enabled() -> bool:
+    """Whether the ESPN Email Code method is offered.
+
+    On by default -- it needs no configuration now that the OneID contract
+    carries no API key. `FWR_ESPN_OTP_ENABLED=0` is a kill switch for an
+    experimental feature with an external dependency, so it can be turned off
+    without a redeploy if Disney's flow misbehaves.
+    """
+    return os.environ.get("FWR_ESPN_OTP_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 class OtpState(str, Enum):
@@ -196,16 +208,12 @@ def start_flow(
         raise OtpFlowError("That does not look like an email address.", step="start")
 
     flow = registry.create(user)
-    try:
-        client = DisneyOneID(api_key=api_key_from_env(), transport=transport)
-    except OneIDError as exc:
-        flow.state = OtpState.FAILED
-        flow.last_error = str(exc)
-        raise OtpFlowError(str(exc), step="config") from exc
-
+    client = DisneyOneID(transport=transport)
     flow.client = client
     try:
-        client.start_flow()
+        # Step 1 confirms the account exists and seeds the flow; step 2 sends
+        # the code and returns the session id the redeem step needs.
+        client.recovery_methods(email)
         client.request_otp(email)
     except OneIDError as exc:
         flow.state = OtpState.FAILED

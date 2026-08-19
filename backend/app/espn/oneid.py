@@ -10,27 +10,38 @@ authenticated ESPN session.
 It is **only an acquisition mechanism.** The single job of this module is to end
 up holding ESPN's two session cookies -- `SWID` and `espn_s2` -- and nothing
 else. The moment those two are in hand, every Disney artifact (the access token,
-the refresh token, the recovery context, the device grant, the OTP itself) is
-discarded. The rest of the app then uses the existing ESPN connection layer,
-which already understands exactly those two cookies. There is deliberately no
-second authentication architecture downstream of this.
+the recovery token, the identity id, the session-transfer material, the OTP
+itself) is discarded. The rest of the app then uses the existing ESPN
+connection layer, which already understands exactly those two cookies. There is
+deliberately no second authentication architecture downstream of this.
 
-THE CONTRACT IS NOT YET VERIFIED AGAINST LIVE DISNEY
-----------------------------------------------------
-The public description of this flow gives the endpoint URLs but not their
-request/response bodies, and this environment cannot reach `registerdisney`.
-Every place where a request body is built or a field is read from a response is
-therefore a best guess, marked `# CONTRACT:`. `scripts/test_espn_otp.py` runs
-the flow against real Disney and prints enough (redacted) structure to correct
-these in one pass. Until it has, treat the field paths here as provisional.
+THE OBSERVED CONTRACT
+---------------------
+The request/response shapes below are taken from a real browser capture of the
+ESPN passwordless login (HAR), not guessed. The four calls, all POST under
+`/jgc/v8/client/ESPN-ONESITE.WEB-PROD`:
+
+1. `/guest/recovery-methods`         req {loginValue}      -> data.recoveryMethods[]
+2. `/notification/otp/recovery`      req {lookupValue}     -> data.sessionId, expirationTime
+3. `/otp/redeem`                     req {passcode,        -> data.swid,
+                                          sessionIds[]}       data.recoveryToken.access_token
+4. `/guest/login/recoveryToken`      req {swid,            -> data.s2,
+      ?expand=...&expand=s2               recoveryToken}      data.profile.swid, data.token
+
+Final credentials:
+    SWID     = data.profile.swid   (validated to agree with the redeemed swid)
+    espn_s2  = data.s2
+
+The captured requests carried **no** `Authorization: APIKEY` / `X-API-Key`
+header, so none is sent here.
 
 SECURITY
 --------
 * The ESPN password is never collected -- there is no password in an OTP flow.
-* The OTP, the Disney tokens, and the recovery context never touch the database
-  and are never logged.
+* The OTP, the recovery/access/identity tokens and the session material never
+  touch the database and are never logged.
 * Raw Disney responses are never logged. Errors are redacted (`redact()` also
-  scrubs email addresses) before they leave this module.
+  scrubs email addresses and long tokens) before they leave this module.
 * The only thing that persists is `SWID` + `espn_s2`, through the existing
   encrypted store.
 """
@@ -39,7 +50,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -51,26 +61,26 @@ from .redaction import redact
 
 log = logging.getLogger(__name__)
 
-#: The OneID client the ESPN *website* identifies as. The recovery flow is
-#: scoped to this client id.
+#: The OneID client the ESPN *website* identifies as, in the URL path.
 CLIENT_ID = "ESPN-ONESITE.WEB-PROD"
 ONEID_BASE = f"https://registerdisney.go.com/jgc/v8/client/{CLIENT_ID}"
 
-#: ESPN's web client sends a fixed public API key on every OneID call as
-#: `authorization: APIKEY <key>`. It is embedded in espn.com's JavaScript and is
-#: not a user secret, but it does change, so it is configuration rather than a
-#: constant. The discovery script reads it from the Network tab; the service
-#: reads it from `FWR_ESPN_ONEID_API_KEY`. Without it, OneID answers 401.
-API_KEY_ENV = "FWR_ESPN_ONEID_API_KEY"
-
 DEFAULT_TIMEOUT = 15.0
 
-#: Query string every OneID call in this flow carries.
-_FLOW_QUERY = {"langPref": "en-US", "feature": "no-password-reuse"}
-
-
-def api_key_from_env() -> str:
-    return (os.environ.get(API_KEY_ENV) or "").strip()
+#: Query params, per step, exactly as the browser sends them. Lists of tuples
+#: because step 4 repeats `expand`.
+_Q_COMMON = [("langPref", "en-US"), ("feature", "no-password-reuse")]
+_Q_RECOVERY_METHODS = _Q_COMMON
+_Q_OTP_SEND = [("intent", "")] + _Q_COMMON
+_Q_OTP_REDEEM = _Q_COMMON
+_Q_LOGIN_RECOVERY = [
+    ("expand", "profile"),
+    ("expand", "displayname"),
+    ("expand", "linkedaccounts"),
+    ("expand", "marketing"),
+    ("expand", "entitlements"),
+    ("expand", "s2"),
+] + _Q_COMMON
 
 
 class OneIDError(RuntimeError):
@@ -92,19 +102,29 @@ class OneIDResult:
 
     ok: bool
     status_code: int
-    #: Set-Cookie seen on this response, name -> value. Accumulated by the flow.
     cookies: dict[str, str] = field(default_factory=dict)
-    #: In-memory only. The discovery script redacts before display.
     raw: Any = None
 
 
-def _deep_find(node: Any, keys: set[str], depth: int = 0) -> Any:
-    """First value under any of `keys`, searched case-insensitively, any depth.
+def _data(payload: Any) -> dict:
+    """Unwrap the `data` envelope OneID wraps every response in."""
+    if isinstance(payload, dict):
+        inner = payload.get("data")
+        return inner if isinstance(inner, dict) else payload
+    return {}
 
-    Disney has reshaped this payload before and the exact path is unverified, so
-    a search is more robust than a fixed path -- and it degrades to "not found"
-    rather than a crash when the shape moves.
-    """
+
+def _get(node: Any, *path: str) -> Any:
+    """Walk a fixed key path; return None if any hop is missing."""
+    for key in path:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _deep_find(node: Any, keys: set[str], depth: int = 0) -> Any:
+    """Fallback search when the fixed path misses (one HAR is one sample)."""
     if depth > 8 or node is None:
         return None
     if isinstance(node, dict):
@@ -149,18 +169,9 @@ class DisneyOneID:
 
     def __init__(
         self,
-        api_key: str,
         timeout: float = DEFAULT_TIMEOUT,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        if not api_key:
-            raise OneIDError(
-                "No OneID API key configured. Set FWR_ESPN_ONEID_API_KEY "
-                "(the `authorization: APIKEY ...` value from espn.com).",
-                step="config",
-            )
-        self._api_key = api_key
-        self._conversation_id = str(uuid.uuid4())
         self._client = httpx.Client(
             timeout=timeout,
             transport=transport,
@@ -168,17 +179,15 @@ class DisneyOneID:
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "Authorization": f"APIKEY {api_key}",
-                "conversation-id": self._conversation_id,
-                "oneid-client-id": CLIENT_ID,
+                "conversation-id": str(uuid.uuid4()),
                 "User-Agent": "FantasyWarRoom/1.0",
             },
         )
         #: Cross-request pieces the flow itself must echo. Never persisted.
-        self._flow_token: str | None = None
-        self._otp_session: str | None = None
-        self._disney_token: str | None = None
-        #: Every ESPN cookie seen across the whole flow, name -> value.
+        self._session_id: str | None = None
+        self._redeemed_swid: str | None = None
+        self._recovery_token: str | None = None
+        #: Any ESPN cookie seen via Set-Cookie across the flow (belt-and-braces).
         self._cookie_jar: dict[str, str] = {}
 
     def close(self) -> None:
@@ -192,16 +201,11 @@ class DisneyOneID:
 
     # -- plumbing ----------------------------------------------------------
 
-    def _call(self, method: str, path: str, step: str, body: dict | None = None) -> OneIDResult:
+    def _post(self, path: str, params, step: str, body: dict) -> OneIDResult:
         url = ONEID_BASE + path
-        # APIKEY (app auth) stays on every call via the client headers. The
-        # in-progress flow token is carried in the body where the contract
-        # expects it, not as an Authorization override -- APIKEY must remain.
         headers = {"correlation-id": str(uuid.uuid4())}
         try:
-            response = self._client.request(
-                method, url, params=_FLOW_QUERY, json=body, headers=headers
-            )
+            response = self._client.post(url, params=params, json=body, headers=headers)
         except httpx.HTTPError as exc:
             raise OneIDError(f"Could not reach Disney OneID: {exc}", step=step) from exc
 
@@ -214,7 +218,6 @@ class DisneyOneID:
         self._cookie_jar.update(cookies)
 
         if response.status_code >= 400:
-            # CONTRACT: OneID error bodies carry a code under `error` / `errors`.
             detail = _deep_find(payload, {"message", "code", "error"}) or ""
             raise OneIDError(
                 f"OneID {step} failed ({response.status_code}): {detail}",
@@ -229,106 +232,134 @@ class DisneyOneID:
             raw=payload if payload is not None else response.text,
         )
 
-    # -- step 1: CREATED ---------------------------------------------------
+    # -- step 1: CREATED (confirm the account, seed the flow) --------------
 
-    def start_flow(self) -> OneIDResult:
-        """Establish a recovery flow context.
+    def recovery_methods(self, email: str) -> OneIDResult:
+        """`/guest/recovery-methods` -- which recovery channels the account has.
 
-        CONTRACT: `/guest-flow` is expected to return a flow / conversation
-        token that the OTP request then references.
+        The browser makes this call before sending a code; it also fails early
+        and clearly when the email is not a known ESPN account.
         """
-        result = self._call("POST", "/guest-flow", step="start_flow", body={})
-        self._flow_token = _deep_find(
-            result.raw, {"flowtoken", "flow_token", "token", "conversationtoken"}
+        result = self._post(
+            "/guest/recovery-methods",
+            _Q_RECOVERY_METHODS,
+            step="recovery_methods",
+            body={"loginValue": email},
         )
+        methods = _get(result.raw, "data", "recoveryMethods")
+        if isinstance(methods, list) and not methods:
+            raise OneIDError(
+                "ESPN has no recovery method for that email. Check the address.",
+                step="recovery_methods",
+            )
         return result
 
     # -- step 2: OTP_SENT --------------------------------------------------
 
     def request_otp(self, email: str) -> OneIDResult:
-        """Ask Disney to email a one-time code to `email`.
+        """`/notification/otp/recovery` -- email the six-digit code.
 
-        CONTRACT: `/notification/otp/recovery` with the address as the login
-        value. `flowToken` echoes the context from step 1 when present.
+        The request key is `lookupValue`; the response carries the `sessionId`
+        that the redeem step must echo back.
         """
-        body: dict[str, Any] = {"loginValue": email, "intent": ""}
-        if self._flow_token:
-            body["flowToken"] = self._flow_token
-        result = self._call(
-            "POST", "/notification/otp/recovery", step="request_otp", body=body
+        result = self._post(
+            "/notification/otp/recovery",
+            _Q_OTP_SEND,
+            step="request_otp",
+            body={"lookupValue": email},
         )
-        self._otp_session = _deep_find(
-            result.raw, {"otpsession", "otp_session", "session", "flowtoken"}
+        self._session_id = _get(result.raw, "data", "sessionId") or _deep_find(
+            result.raw, {"sessionid"}
         )
+        if not self._session_id:
+            raise OneIDError(
+                "ESPN did not return a session for the code request.",
+                step="request_otp",
+            )
         return result
 
     # -- step 3: OTP_VERIFIED ---------------------------------------------
 
     def submit_otp(self, code: str) -> OneIDResult:
-        """Redeem the six-digit code for a Disney session.
+        """`/otp/redeem` -- redeem the code for a recovery token.
 
-        CONTRACT: `/otp/redeem` returns the token object
-        (`data.token.access_token`, `refresh_token`, ...). We keep only the
-        access token, and only long enough to establish the ESPN session.
+        The response carries `data.swid` and `data.recoveryToken.access_token`;
+        both feed the final login exchange.
         """
-        body: dict[str, Any] = {"passcode": (code or "").strip()}
-        if self._otp_session:
-            body["otpSession"] = self._otp_session
-        result = self._call("POST", "/otp/redeem", step="submit_otp", body=body)
-        self._disney_token = _deep_find(
-            result.raw, {"access_token", "accesstoken", "id_token", "token"}
+        result = self._post(
+            "/otp/redeem",
+            _Q_OTP_REDEEM,
+            step="submit_otp",
+            body={"passcode": (code or "").strip(), "sessionIds": [self._session_id]},
         )
-        # SWID is the OneID GUID and is frequently a claim on the token payload.
-        swid = _deep_find(result.raw, {"swid"})
-        if swid:
-            self._cookie_jar.setdefault("SWID", _normalise_swid(swid))
+        data = _data(result.raw)
+        self._redeemed_swid = _normalise_swid(
+            _get(data, "swid") or _get(data, "recoveryToken", "swid")
+        )
+        self._recovery_token = (
+            _get(data, "recoveryToken", "access_token")
+            or _deep_find(_get(data, "recoveryToken"), {"access_token", "accesstoken"})
+        )
+        if not self._recovery_token:
+            raise OneIDError(
+                "ESPN accepted the code but returned no recovery token.",
+                step="submit_otp",
+            )
         return result
 
     # -- step 4: ESPN_SESSION_ESTABLISHED ---------------------------------
 
     def establish_espn_session(self) -> tuple[str, str]:
-        """Turn the Disney session into ESPN's `SWID` + `espn_s2`.
+        """`/guest/login/recoveryToken` -- exchange the recovery token for `s2`.
 
-        Sources tried, most-authoritative first:
-
-        1. Any `Set-Cookie` accumulated across the flow -- redeeming the OTP
-           often sets the ESPN cookies directly.
-        2. The token payload -- `SWID` is the OneID GUID, so it is frequently
-           present even when only `espn_s2` needs a cookie.
-        3. One more GET, carrying the Disney session, to mint `espn_s2`.
+        Requesting `expand=s2` makes the response carry `data.s2` (the espn_s2
+        value) and `data.profile.swid` directly. The profile SWID is validated
+        against the SWID redeemed in step 3 before either is trusted -- they
+        must be the same account.
 
         Returns `(swid, espn_s2)`. Raises if either is missing, because a
         session without both is unusable and must not be stored as if it were.
         """
-        swid = _normalise_swid(self._cookie_jar.get("SWID"))
-        espn_s2 = self._cookie_jar.get("espn_s2") or self._cookie_jar.get("ESPN_S2") or ""
+        if not self._recovery_token:
+            raise OneIDError("No recovery token; redeem a code first.", step="establish")
 
-        if not swid or not espn_s2:
-            # CONTRACT: the least-certain step. Some flows need one more GET to
-            # an ESPN endpoint carrying the Disney token to mint espn_s2. The
-            # discovery script pins the real endpoint and its response shape.
-            try:
-                result = self._call("GET", "/guest/tokens", step="establish")
-                if not swid:
-                    swid = _normalise_swid(
-                        self._cookie_jar.get("SWID") or _deep_find(result.raw, {"swid"})
-                    )
-                if not espn_s2:
-                    espn_s2 = (
-                        self._cookie_jar.get("espn_s2")
-                        or _deep_find(result.raw, {"espn_s2"})
-                        or ""
-                    )
-            except OneIDError:
-                pass  # fall through to the explicit failure below
+        result = self._post(
+            "/guest/login/recoveryToken",
+            _Q_LOGIN_RECOVERY,
+            step="establish",
+            body={"swid": self._redeemed_swid, "recoveryToken": self._recovery_token},
+        )
+        data = _data(result.raw)
 
-        if not swid or not espn_s2:
+        espn_s2 = (
+            _get(data, "s2")
+            or self._cookie_jar.get("espn_s2")
+            or _deep_find(data, {"s2", "espn_s2"})
+            or ""
+        )
+        profile_swid = _normalise_swid(
+            _get(data, "profile", "swid")
+            or self._cookie_jar.get("SWID")
+            or _deep_find(data, {"swid"})
+        )
+
+        if not profile_swid or not espn_s2:
             missing = ", ".join(
-                name for name, present in (("SWID", swid), ("espn_s2", espn_s2)) if not present
+                name for name, present in (("SWID", profile_swid), ("espn_s2", espn_s2))
+                if not present
             )
             raise OneIDError(
-                f"Authenticated, but could not obtain {missing} from the ESPN session. "
-                "The redeem step's response shape needs verifying against live Disney.",
+                f"Logged in, but the response did not carry {missing}.",
                 step="establish",
             )
-        return swid, str(espn_s2)
+
+        # Both the redeemed SWID (step 3) and the profile SWID (step 4) describe
+        # the account we just authenticated. If they disagree, something is
+        # wrong -- refuse rather than store a mismatched identity.
+        if self._redeemed_swid and profile_swid != self._redeemed_swid:
+            raise OneIDError(
+                "The logged-in account did not match the code that was redeemed.",
+                step="establish",
+            )
+
+        return profile_swid, str(espn_s2)

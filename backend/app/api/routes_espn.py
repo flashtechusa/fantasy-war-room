@@ -149,13 +149,12 @@ def connection_status(
     """Where this account is in the connection flow. No secrets.
 
     Reports which acquisition methods are available so the UI can order them
-    without hard-coding. `otp_available` is false until the OneID API key is
-    configured, which keeps the experimental method from being offered when it
-    cannot possibly work.
+    without hard-coding. `otp_available` follows the OTP kill switch
+    (`FWR_ESPN_OTP_ENABLED`), which is on by default.
     """
     state = espn_connect.status(session, user, settings)
     state["manual_entry_available"] = True
-    state["otp_available"] = bool(espn_otp.api_key_from_env())
+    state["otp_available"] = espn_otp.otp_enabled()
     state["public_link_available"] = True
     return state
 

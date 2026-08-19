@@ -50,7 +50,7 @@ A snapshot, so a future session doesn't re-derive it or contradict it.
 | Connect ESPN flow: discover leagues → confirm rules → import | **Built** — `services/espn_connect.py`, `ConnectEspn.tsx` |
 | League discovery from the ESPN fan profile | **Built** — `espn/discovery.py` |
 | Public-league import with no credentials | **Built** |
-| ESPN Email Code (OTP) connect — the primary method | **Built, contract unverified against live Disney** — see below |
+| ESPN Email Code (OTP) connect — the primary method | **Built to the observed Disney contract; final live server-side proof pending** — see below |
 | Live-draft sync with a direct `mDraftDetail` fallback | **Built** — see `espn-api-comparison.md` |
 | Draft-sync diagnostics (behind `FWR_DEBUG_SCREENS`) | **Built** |
 | Desktop browser extension (cookie capture) | **Built, proof-of-concept, unpublished** |
@@ -122,13 +122,16 @@ procedure for all four, and what to do when one breaks, is the runbook
 `espn-connection-backup.md`.
 
 **OTP changes the iPhone-private story.** That case previously had no browser
-path and was marked "native app required". OTP, if it proves out against live
-Disney, connects a private league on an iPhone with no app and no desktop —
-which is why it is now primary. It is built, but its Disney request/response
-contract is a best guess until `scripts/test_espn_otp.py` runs it live; native
-becomes a reliability fallback rather than the only option. The **Share →
-Fantasy War Room** iOS share target is still worth building, but now as a
-convenience on the #2 fallback rather than the mobile answer.
+path and was marked "native app required". OTP connects a private league on an
+iPhone with no app and no desktop — which is why it is now primary. It is built
+to the **observed** Disney contract (from a real browser capture of the
+passwordless login, four POSTs ending in `data.s2` + `data.profile.swid`), so it
+is no longer guesswork; the one remaining step is the final live *server-side*
+proof — running the flow from the backend against a private test league via
+`scripts/test_espn_otp.py`. Native becomes a reliability fallback rather than the
+only option. The **Share → Fantasy War Room** iOS share target is still worth
+building, but now as a convenience on the #2 fallback rather than the mobile
+answer.
 
 ### Server-side ownership enforcement (required, not yet done)
 

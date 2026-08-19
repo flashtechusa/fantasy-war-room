@@ -36,19 +36,29 @@ with no password and no DevTools.
 
 `[SCREENSHOT: email + code entry]`
 
-**Server prerequisite.** This method is only offered when
-`FWR_ESPN_ONEID_API_KEY` is set (the `authorization: APIKEY …` value ESPN's
-website sends on its `registerdisney.go.com` calls; read it from the Network tab
-once and set it in the environment). Without it the app hides the method and
-shows Public/Manual instead — that is expected, not a bug.
+**Server prerequisite: none.** The real Disney recovery flow carries no API key,
+so this method needs no configuration. `FWR_ESPN_OTP_ENABLED=0` is a kill switch
+that hides it (falling back to Public/Manual) if Disney's flow ever misbehaves —
+on by default.
 
 **If it stops working entirely** (Disney changed the flow): the app surfaces a
-redacted error naming the step that broke (`start_flow`, `request_otp`,
+redacted error naming the step that broke (`recovery_methods`, `request_otp`,
 `submit_otp`, `establish`). Run `python scripts/test_espn_otp.py --show-shapes`
 from a machine that can reach Disney; it prints the redacted response structure
-for the broken step so the request/response contract in
-`backend/app/espn/oneid.py` can be corrected. **Meanwhile, tell users to use
-Method 4 (Manual).** That is the whole reason Manual is permanent.
+for the broken step so the observed contract in `backend/app/espn/oneid.py` can
+be corrected. **Meanwhile, tell users to use Method 4 (Manual).** That is the
+whole reason Manual is permanent.
+
+The four calls, for reference (all POST under
+`/jgc/v8/client/ESPN-ONESITE.WEB-PROD`):
+
+1. `/guest/recovery-methods` — `{loginValue}` → confirms the account
+2. `/notification/otp/recovery` — `{lookupValue}` → emails the code, returns a session id
+3. `/otp/redeem` — `{passcode, sessionIds[]}` → returns `swid` + a recovery token
+4. `/guest/login/recoveryToken?expand=s2…` — `{swid, recoveryToken}` → returns
+   `data.s2` (= espn_s2) and `data.profile.swid` (= SWID)
+
+The app keeps only `SWID` + `espn_s2` and discards every other token.
 
 **Common messages**
 
@@ -58,7 +68,7 @@ Method 4 (Manual).** That is the whole reason Manual is permanent.
 | "ESPN sent a login code…" then no email | Wrong email, or ESPN delay | Check spam; "Use a different email"; wait a minute |
 | "That code request has expired. Start again." | >10 minutes since the code was sent | Start again — codes and flows expire in 10 min |
 | "OneID … failed" | Disney rejected the step | See "If it stops working" above |
-| Method not shown at all | `FWR_ESPN_ONEID_API_KEY` unset | Use Public or Manual |
+| Method not shown at all | `FWR_ESPN_OTP_ENABLED=0` (kill switch) | Use Public or Manual, or re-enable it |
 
 ---
 

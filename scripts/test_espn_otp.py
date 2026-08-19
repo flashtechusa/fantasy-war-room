@@ -10,23 +10,23 @@ proving the resulting cookies read a private league.
 
 You will be prompted for your ESPN email and, after Disney sends it, the code.
 
-TWO JOBS
---------
-1. Confirm the flow works end to end (the SUCCESS path).
-2. When a step's contract is wrong -- which is expected on the first live run,
-   because the request/response shapes were guessed -- show the response
-   *structure* (keys only, values redacted) so the guesses in
-   `app/espn/oneid.py` can be corrected in one pass. Pass `--show-shapes`.
+The four steps and the fields each must yield (from the observed contract):
+    1 /guest/recovery-methods     -> a recovery method exists
+    2 /notification/otp/recovery  -> a session id
+    3 /otp/redeem                 -> swid + recovery token
+    4 /guest/login/recoveryToken  -> data.s2 (espn_s2) + data.profile.swid
+
+If a step drifts, pass --show-shapes to print the redacted response structure so
+`app/espn/oneid.py` can be corrected.
 
 CONFIG
 ------
-    FWR_ESPN_ONEID_API_KEY   the `authorization: APIKEY ...` value espn.com sends
-                             on its registerdisney calls (Network tab). Required.
-    ESPN_TEST_LEAGUE_ID      a PRIVATE league you are in, for the proof step.
-    ESPN_SEASON              defaults to 2026.
+    ESPN_TEST_LEAGUE_ID   a PRIVATE league you are in, for the proof step.
+    ESPN_SEASON           defaults to 2026.
 
-Nothing is written to disk. The email, code, tokens and cookies are never
-printed; only FOUND / NOT FOUND and redacted structure.
+No API key is needed -- the real Disney flow carries none. Nothing is written to
+disk; the email, code, tokens and cookies are never printed, only FOUND /
+NOT FOUND and redacted structure.
 """
 
 from __future__ import annotations
@@ -44,22 +44,18 @@ from app.espn.redaction import redact  # noqa: E402
 
 
 def found(label: str, value: object) -> None:
-    print(f"  {label:<12} {'FOUND' if value else 'NOT FOUND'}")
+    print(f"  {label:<14} {'FOUND' if value else 'NOT FOUND'}")
 
 
-def shape(node, depth: int = 0, max_depth: int = 4):
-    """Keys and value *types* only -- never values. Redacts any string it prints."""
+def shape(node, depth: int = 0, max_depth: int = 4) -> None:
+    """Keys and value *types* only -- never values."""
     pad = "    " * (depth + 1)
     if isinstance(node, dict):
-        for k in list(node)[:20]:
+        for k in list(node)[:25]:
             v = node[k]
-            if isinstance(v, (dict, list)):
-                print(f"{pad}{k}: {type(v).__name__}")
-                if depth < max_depth:
-                    shape(v, depth + 1, max_depth)
-            else:
-                kind = type(v).__name__
-                print(f"{pad}{k}: {kind}")
+            print(f"{pad}{k}: {type(v).__name__}")
+            if isinstance(v, (dict, list)) and depth < max_depth:
+                shape(v, depth + 1, max_depth)
     elif isinstance(node, list):
         print(f"{pad}[{len(node)} items]")
         if node and depth < max_depth:
@@ -72,11 +68,6 @@ def main() -> int:
                         help="Print redacted response structure for each step.")
     args = parser.parse_args()
 
-    api_key = oneid.api_key_from_env()
-    if not api_key:
-        print("Set FWR_ESPN_ONEID_API_KEY first (the APIKEY value from espn.com).")
-        return 2
-
     league_id = os.environ.get("ESPN_TEST_LEAGUE_ID", "").strip()
     season = int(os.environ.get("ESPN_SEASON", "2026"))
 
@@ -85,41 +76,41 @@ def main() -> int:
         print("That does not look like an email address.")
         return 2
 
-    client = oneid.DisneyOneID(api_key=api_key)
+    client = oneid.DisneyOneID()
     try:
-        print("\nStarting Disney flow...")
-        r1 = client.start_flow()
-        found("flow token", client._flow_token)  # noqa: SLF001 - diagnostic
+        print("\n[1/4] Checking the account (recovery-methods)...")
+        r1 = client.recovery_methods(email)
+        print("  OK")
         if args.show_shapes:
             shape(r1.raw)
 
-        print("\nRequesting OTP...")
+        print("\n[2/4] Requesting the code (notification/otp/recovery)...")
         r2 = client.request_otp(email)
-        print("  Code sent (check your email).")
+        found("session id", client._session_id)  # noqa: SLF001 - diagnostic
+        print("  Code sent — check your email.")
         if args.show_shapes:
             shape(r2.raw)
 
-        code = input("\nEnter code from your email: ").strip()
+        code = input("\nEnter the code from your email: ").strip()
 
-        print("\nRedeeming code...")
+        print("\n[3/4] Redeeming the code (otp/redeem)...")
         r3 = client.submit_otp(code)
-        found("disney token", client._disney_token)  # noqa: SLF001
+        found("redeemed SWID", client._redeemed_swid)  # noqa: SLF001
+        found("recovery token", client._recovery_token)  # noqa: SLF001
         if args.show_shapes:
             shape(r3.raw)
 
-        print("\nEstablishing ESPN session...")
+        print("\n[4/4] Exchanging for espn_s2 (guest/login/recoveryToken)...")
         try:
             swid, espn_s2 = client.establish_espn_session()
             found("SWID", swid)
             found("espn_s2", espn_s2)
         except oneid.OneIDError as exc:
-            found("SWID", client._cookie_jar.get("SWID"))  # noqa: SLF001
-            found("espn_s2", client._cookie_jar.get("espn_s2"))  # noqa: SLF001
             print(f"\n  establish failed: {redact(exc)}")
             print("  Cookies seen across the flow (names only):",
                   sorted(client._cookie_jar))  # noqa: SLF001 - names are not secret
             if args.show_shapes:
-                print("  redeem response shape:")
+                print("  redeem (step 3) response shape:")
                 shape(r3.raw)
             return 1
     finally:
@@ -130,7 +121,7 @@ def main() -> int:
               "private league read.")
         return 0
 
-    print(f"\nTesting private league {league_id}...")
+    print(f"\nProving private league {league_id}...")
     http = EspnHttpClient(swid=swid, espn_s2=espn_s2)
     try:
         resp = http.league_view(int(league_id), season, ["mSettings", "mTeam"])
@@ -141,7 +132,7 @@ def main() -> int:
         print(f"  League: {settings.get('name', '(no name)')}")
         print(f"  Teams:  {len(teams)}")
         if resp.status_code == 200 and settings.get("name") and teams:
-            print("\nSUCCESS -- phone-only private ESPN onboarding works via OTP.")
+            print("\nSUCCESS — phone-only private ESPN onboarding works via OTP.")
             return 0
         print("\nReached ESPN but did not get authenticated league data. "
               "Check the league id is one you are in.")
