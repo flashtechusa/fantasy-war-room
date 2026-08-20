@@ -295,7 +295,6 @@ def main() -> int:
     # projection from the active source. Under ESPN this is the import-gap check.
     # Under a non-ESPN source it also shows how much of the ranking the source
     # really drove vs where it fell back to ESPN.
-    label = "import gap" if args.source == "espn" else f"{args.source} coverage"
     print(f"\nROSTER COVERAGE  ({args.source.upper()} projections; roster max = {expected_size or '?'})")
     print("-" * 74)
     any_missing = False
@@ -313,9 +312,14 @@ def main() -> int:
             print("  (imported < max just means empty bench/IR spots, which is normal.)")
         else:
             print(f"  {args.source.upper()} covers every rostered player -- no ESPN fallback used.")
-    elif args.source != "espn":
-        print(f"  '<-- not covered' players fell back to ESPN ({label} is expected for "
-              "FantasyPros' free tier, which only returns the top of each position).")
+    elif args.source == "sleeper":
+        print("  '<-- not covered' players fell back to ESPN. Sleeper is fetched for "
+              "QB/RB/WR/TE only,\n  so kickers and defenses always fall back -- immaterial "
+              "to the skill-position ranking.")
+    elif args.source == "fantasypros":
+        print("  '<-- not covered' players fell back to ESPN. FantasyPros' free tier only "
+              "returns the\n  top of each position, so deeper rostered players fall back -- "
+              "check how many before trusting.")
 
     mine_cov = next((r for r in rows if r["mine"]), None)
     if mine_cov:
