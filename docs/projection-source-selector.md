@@ -43,6 +43,14 @@ only into that user's own `Settings`. `POST /api/league/projections/fantasypros/
 stores it, imports FantasyPros immediately, and returns the coverage so the user
 sees what their key actually covers before relying on it.
 
+## Existing keys keep working
+
+A FantasyPros key already configured install-wide (the pre-existing global
+`fantasypros_api_key`) is recognised as usable — the status reports
+`key_set: true` with `own_key: false` / `key_source: "install"`, and selecting
+FantasyPros or Consensus imports with it. No re-entry. A user only adds a key of
+their own to override the install key for their account.
+
 ## API
 
 - `GET  /api/league/projections/status` — mode, per-source coverage, key set?, warnings.

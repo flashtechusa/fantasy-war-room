@@ -247,3 +247,40 @@ def test_fantasypros_key_stored_and_coverage_reported(client, monkeypatch):
     ).json()
     assert warn["mode"] == "fantasypros"
     assert any("FantasyPros" in w for w in warn["warnings"])
+
+
+def test_existing_install_key_is_recognised_without_re_entry(client, monkeypatch):
+    """A key already configured install-wide counts as set (no re-entry needed).
+
+    The status must report key_set=True (usable) but own_key=False (not this
+    user's personal key), and selecting FantasyPros must import using that key.
+    """
+    assert client.post("/api/league/import").status_code in (200, 201)
+
+    # Configure an install-level key the old way (global runtime override).
+    from app.db import session_scope
+    from app.models import Player
+
+    with session_scope() as s:
+        runtime_config.write_overrides(s, {"fantasypros_api_key": "INSTALL-KEY"})
+        sample = s.query(Player).filter(Player.position == "RB").limit(4).all()
+        FakeFPClient.covered = [
+            FantasyProsPlayer(
+                name=p.name, position=p.position, pro_team=p.pro_team or "",
+                raw_stats={"24": 1200.0, "25": 9.0}, projected_games=17.0,
+            )
+            for p in sample
+        ]
+    monkeypatch.setattr(projection_service, "FantasyProsClient", FakeFPClient)
+
+    status = client.get("/api/league/projections/status").json()
+    assert status["fantasypros"]["key_set"] is True
+    assert status["fantasypros"]["own_key"] is False
+    assert status["fantasypros"]["key_source"] == "install"
+
+    # Selecting FantasyPros imports with the install key -- no key was entered.
+    picked = client.post(
+        "/api/league/projections/mode", json={"mode": "fantasypros"}
+    ).json()
+    assert picked["mode"] == "fantasypros"
+    assert picked["fantasypros"]["imported"] is True

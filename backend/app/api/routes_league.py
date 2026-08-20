@@ -211,6 +211,19 @@ class FantasyProsKeyRequest(BaseModel):
     )
 
 
+def _already_imported(session: Session, league: League, source_key: str) -> int:
+    """How many of this league's players a stored source already covers."""
+    return session.scalar(
+        select(func.count(PlayerProjection.id))
+        .join(Player, Player.id == PlayerProjection.player_id)
+        .where(
+            PlayerProjection.source_key == source_key,
+            Player.season == league.season,
+            Player.source == league.source,
+        )
+    ) or 0
+
+
 def _source_coverage(session: Session, league: League, source_key: str) -> dict:
     """How many league players a stored source covers -- the honesty check."""
     matched = session.scalar(
@@ -249,10 +262,19 @@ def _projection_status(session: Session, league: League, user: User) -> dict:
     """
     config = runtime_config.user_config(session, user)
     mode = runtime_config.resolve_projection_mode(config)
-    fp_key_set = runtime_config.has_fantasypros_key(config)
+    # A key is usable if the user stored their own OR the install already has one
+    # (the pre-existing install-level key keeps working -- no re-entry needed).
+    own_key = runtime_config.has_fantasypros_key(config)
+    effective = runtime_config.settings_for_user(session, user)
+    fp_key_set = bool(effective.fantasypros_api_key)
     sleeper = _source_coverage(session, league, SLEEPER_SOURCE_KEY)
     fantasypros = _source_coverage(session, league, FP_SOURCE_KEY)
-    fantasypros = {**fantasypros, "key_set": fp_key_set}
+    fantasypros = {
+        **fantasypros,
+        "key_set": fp_key_set,
+        "own_key": own_key,
+        "key_source": "you" if own_key else ("install" if fp_key_set else None),
+    }
 
     warnings: list[str] = []
     if mode == "sleeper" and not sleeper["imported"]:
@@ -307,33 +329,33 @@ def set_projection_mode(
 ) -> dict:
     """Choose which projection source builds this user's board.
 
-    Selecting Sleeper or Consensus best-effort imports Sleeper first (it needs
-    no key), so the board has numbers to re-score. FantasyPros needs the user's
-    own key and an explicit import, so it is never fetched here -- the status
-    warns if it is selected without data. "espn" restores the native board.
+    Selecting a mode best-effort imports the sources it needs, so it just works:
+    Sleeper needs no key; FantasyPros uses whatever key is already configured
+    (the user's own or the existing install key -- no re-entry). Each import is
+    non-fatal, and the status flags anything still missing. "espn" restores the
+    native board.
     """
     try:
         mode = runtime_config.set_projection_mode(session, user, payload.mode)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    if mode in ("sleeper", "consensus"):
-        already = session.scalar(
-            select(func.count(PlayerProjection.id))
-            .join(Player, Player.id == PlayerProjection.player_id)
-            .where(
-                PlayerProjection.source_key == SLEEPER_SOURCE_KEY,
-                Player.season == league.season,
-                Player.source == league.source,
-            )
-        ) or 0
-        if not already:
+    if mode in ("sleeper", "consensus") and not _already_imported(session, league, SLEEPER_SOURCE_KEY):
+        try:
+            projection_service.import_sleeper(session, league)
+            session.commit()
+        except SleeperError:
+            # Non-fatal: mode saved; status flags that Sleeper is not imported.
+            session.rollback()
+
+    if mode in ("fantasypros", "consensus") and not _already_imported(session, league, FP_SOURCE_KEY):
+        fp_key = runtime_config.settings_for_user(session, user).fantasypros_api_key
+        if fp_key:
             try:
-                projection_service.import_sleeper(session, league)
+                projection_service.import_fantasypros(session, league, api_key=fp_key)
                 session.commit()
-            except SleeperError:
-                # Non-fatal: the mode is saved; the status will flag that Sleeper
-                # is not imported so the UI can prompt a retry.
+            except FantasyProsError:
+                # Non-fatal: mode saved; status flags FantasyPros as not imported.
                 session.rollback()
 
     board_service.clear_cache()

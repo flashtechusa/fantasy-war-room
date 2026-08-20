@@ -605,7 +605,11 @@ export interface SourceCoverage {
   coverage: number
   updated_at?: string | null
   scope?: string
+  /** A usable key is configured (the user's own, or the pre-existing install key). */
   key_set?: boolean
+  /** True only when the signed-in user stored their *own* key (vs the install key). */
+  own_key?: boolean
+  key_source?: 'you' | 'install' | null
 }
 
 export interface ProjectionStatus {

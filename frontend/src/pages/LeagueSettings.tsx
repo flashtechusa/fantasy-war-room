@@ -236,6 +236,8 @@ function ProjectionSourceCard({ onChanged }: { onChanged: () => void }) {
   }
 
   const fpKeySet = Boolean(s?.fantasypros.key_set)
+  const fpOwnKey = Boolean(s?.fantasypros.own_key)
+  const fpKeyLabel = fpOwnKey ? '(your key set)' : fpKeySet ? '(install key in use)' : '(not set)'
 
   return (
     <Card title="Projection source">
@@ -284,19 +286,18 @@ function ProjectionSourceCard({ onChanged }: { onChanged: () => void }) {
       <div style={{ marginTop: 14, borderTop: '1px solid var(--line, #2a2a2a)', paddingTop: 12 }}>
         <div className="small" style={{ marginBottom: 6 }}>
           <strong>Your FantasyPros API key</strong>{' '}
-          <span className="faint">{fpKeySet ? '(set)' : '(not set)'}</span>
+          <span className="faint">{fpKeyLabel}</span>
         </div>
         <div className="tiny muted" style={{ marginBottom: 8 }}>
-          Bring your own key — it is stored encrypted and never shared. Saving it
-          imports FantasyPros immediately and reports how much of your roster it
-          covers. Free keys only return the top of each position; the coverage
-          number tells you how much falls back to ESPN.
+          {fpKeySet && !fpOwnKey
+            ? 'A key is already configured for this app, so FantasyPros and Consensus work now — no need to re-enter it. Add your own below only to override it for your account.'
+            : 'Bring your own key — stored encrypted, never shared. Saving it imports FantasyPros and reports how much of your roster it covers. Free keys only return the top of each position; the coverage number shows how much falls back to ESPN.'}
         </div>
         <div className="row" style={{ gap: 8, alignItems: 'center' }}>
           <input
             className="input"
             type="password"
-            placeholder={fpKeySet ? '•••••••• (replace)' : 'Paste your FantasyPros API key'}
+            placeholder={fpOwnKey ? '•••••••• (replace your key)' : 'Paste your FantasyPros API key'}
             value={fpKey}
             onChange={(e) => setFpKey(e.target.value)}
             style={{ flex: 1 }}
@@ -304,7 +305,7 @@ function ProjectionSourceCard({ onChanged }: { onChanged: () => void }) {
           <button className="btn primary" onClick={saveKey} disabled={busy || !fpKey.trim()}>
             Save &amp; test
           </button>
-          {fpKeySet && (
+          {fpOwnKey && (
             <button className="btn" onClick={clearKey} disabled={busy}>
               Remove
             </button>
