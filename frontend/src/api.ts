@@ -483,6 +483,31 @@ export interface TradeResponse {
   their_side: TradeSide | null
 }
 
+export interface TradeProposal {
+  their_team_id: number
+  their_label: string
+  give: WeekPlayer[]
+  receive: WeekPlayer[]
+  my_week_delta: number
+  my_season_delta: number
+  their_week_delta: number
+  their_season_delta: number
+  my_delta: number
+  their_delta: number
+  kind: 'mutual' | 'longshot'
+  headline: string
+  reasons: string[]
+  notes: string[]
+}
+
+export interface TradeFinderResponse {
+  week: number
+  horizon: 'season' | 'week'
+  reason: string | null
+  mutual: TradeProposal[]
+  longshots: TradeProposal[]
+}
+
 export interface SeasonRoster {
   week: number
   team_id: number | null
@@ -989,6 +1014,11 @@ export const api = {
     their_team_id?: number | null
     week?: number | null
   }) => request<TradeResponse>('/api/season/trade', { method: 'POST', body: JSON.stringify(body) }),
+
+  tradeFinder: (horizon: 'season' | 'week' = 'season', includeLongshots = true) =>
+    request<TradeFinderResponse>(
+      `/api/season/trade-finder?horizon=${horizon}&include_longshots=${includeLongshots}`,
+    ),
 
   simulate: (body: { my_slot?: number; simulations?: number; seed?: number }) =>
     request<SimulationResponse>('/api/simulate', {

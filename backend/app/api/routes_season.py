@@ -361,6 +361,55 @@ def trade(
     }
 
 
+def _serialize_proposal(p) -> dict:
+    return {
+        "their_team_id": p.their_team_id,
+        "their_label": p.their_label,
+        "give": [_serialize_player(x) for x in p.give],
+        "receive": [_serialize_player(x) for x in p.receive],
+        "my_week_delta": p.my_week_delta,
+        "my_season_delta": p.my_season_delta,
+        "their_week_delta": p.their_week_delta,
+        "their_season_delta": p.their_season_delta,
+        "my_delta": p.my_delta,
+        "their_delta": p.their_delta,
+        "kind": p.kind,
+        "headline": p.headline,
+        "reasons": p.reasons,
+        "notes": p.notes,
+    }
+
+
+@router.get("/trade-finder")
+def trade_finder(
+    horizon: str = Query("season", pattern="^(season|week)$"),
+    include_longshots: bool = Query(True),
+    week: int | None = Query(None, ge=1, le=18),
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """Proposed trades with other teams that improve your starting lineup.
+
+    `horizon` sets both the ranking and the accept/reject bar: `season`
+    (rest-of-season lineup points) or `week` (win-now). Nothing is sent to ESPN
+    -- these are ranked proposals to execute yourself.
+    """
+    resolved_week = _resolve_week(week, settings)
+    result = season_service.propose_trades(
+        session, league, engine, resolved_week,
+        horizon=horizon, include_longshots=include_longshots,
+    )
+    return {
+        "week": resolved_week,
+        "horizon": result["horizon"],
+        "reason": result.get("reason"),
+        "mutual": [_serialize_proposal(p) for p in result["mutual"]],
+        "longshots": [_serialize_proposal(p) for p in result["longshots"]],
+    }
+
+
 @router.get("/roster")
 def roster(
     week: int | None = Query(None, ge=1, le=18),

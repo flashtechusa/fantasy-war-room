@@ -156,6 +156,65 @@ def my_team(session: Session, league: League):
     return next((team for team in league.teams if team.is_mine), None)
 
 
+def propose_trades(
+    session: Session,
+    league: League,
+    engine: ValuationEngine,
+    week: int,
+    *,
+    horizon: str = "season",
+    include_longshots: bool = True,
+) -> dict:
+    """Find trades with every other team that improve my starting lineup.
+
+    Assembles my roster and every opponent's roster as scored `WeeklyPlayer`s in
+    one pass, then hands them to the engine's `find_trades`. Returns the engine's
+    result dict (mutual / longshots) or a `reason` when there is nothing to work
+    with (no roster imported yet).
+    """
+    from ..engine.trades import find_trades
+    from ..services.board import league_shape
+
+    mine_ids = my_roster_ids(session, league)
+    if not mine_ids:
+        return {"horizon": horizon, "mutual": [], "longshots": [], "reason": "no_my_roster"}
+
+    rosters = rosters_by_team(session, league)
+    mine_team = my_team(session, league)
+    my_team_id = mine_team.espn_team_id if mine_team else None
+
+    # Every player on any roster, scored once.
+    everyone_ids: set[int] = set(mine_ids)
+    for ids in rosters.values():
+        everyone_ids |= ids
+    players = {
+        p.espn_player_id: p
+        for p in build_weekly_players(session, league, engine, week, espn_player_ids=everyone_ids)
+    }
+
+    my_roster = [players[pid] for pid in mine_ids if pid in players]
+    if not my_roster:
+        return {"horizon": horizon, "mutual": [], "longshots": [], "reason": "no_my_roster"}
+
+    labels = {t.espn_team_id: t.name for t in league.teams}
+    teams: list[tuple[int, str, list[WeeklyPlayer]]] = []
+    for team_id, ids in rosters.items():
+        # Skip my own team (by id, and defensively by roster overlap).
+        if team_id == my_team_id or ids == mine_ids:
+            continue
+        roster = [players[pid] for pid in ids if pid in players]
+        if roster:
+            teams.append((team_id, labels.get(team_id, f"Team {team_id}"), roster))
+
+    if not teams:
+        return {"horizon": horizon, "mutual": [], "longshots": [], "reason": "no_opponent_rosters"}
+
+    return find_trades(
+        my_roster, teams, league_shape(league), week,
+        horizon=horizon, include_longshots=include_longshots,
+    )
+
+
 def espn_roster_ids(session: Session, league: League) -> set[int]:
     """Player ids on my ESPN roster. Empty when no team is identified.
 
