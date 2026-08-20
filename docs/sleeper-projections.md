@@ -1,5 +1,11 @@
 # Sleeper projections — an isolated comparison source
 
+> **Update:** Sleeper is now one option in the per-user **projection source
+> selector** (ESPN / Sleeper / FantasyPros / Consensus). See
+> [`projection-source-selector.md`](./projection-source-selector.md). The
+> engine-level guarantees below still hold; the old ON/OFF toggle is now the
+> "Sleeper" choice in that selector, and its API path still works.
+
 **Purpose: compare, before deciding whether to combine.** This adds Sleeper as a
 second set of projections you can switch the whole board onto, so you can see how
 its numbers rank your players against the existing source — *without* mixing the

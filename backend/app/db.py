@@ -82,6 +82,8 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "user_espn_config": {
         "verified": "BOOLEAN",
         "use_sleeper_projections": "BOOLEAN",
+        "projection_mode": "VARCHAR(20)",
+        "fantasypros_api_key_encrypted": "VARCHAR(600)",
     },
 }
 

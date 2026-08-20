@@ -56,12 +56,13 @@ def engine_dep(
     league: League = Depends(league_dep),
     settings: Settings = Depends(settings_dep),
 ) -> ValuationEngine:
-    # Per-user projection source. Off (the default) means the historical
-    # blend, byte-identical to before this option existed. On selects Sleeper
-    # exclusively -- its raw stats re-scored under this league's rules.
-    active_source = "sleeper" if settings.use_sleeper_projections else None
+    # Per-user projection source. "espn" (the default) is the native source and
+    # is byte-identical to before this option existed; "sleeper"/"fantasypros"
+    # pick one source with ESPN fallback per uncovered player; "consensus" blends
+    # whatever sources have data. Resolved from the user's saved projection_mode.
+    mode = settings.projection_mode or "espn"
     try:
-        return build_engine(session, league, active_source=active_source)
+        return build_engine(session, league, active_source=mode)
     except LeagueNotImported as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
