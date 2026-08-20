@@ -54,9 +54,14 @@ def league_dep(
 def engine_dep(
     session: Session = Depends(get_db),
     league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
 ) -> ValuationEngine:
+    # Per-user projection source. Off (the default) means the historical
+    # blend, byte-identical to before this option existed. On selects Sleeper
+    # exclusively -- its raw stats re-scored under this league's rules.
+    active_source = "sleeper" if settings.use_sleeper_projections else None
     try:
-        return build_engine(session, league)
+        return build_engine(session, league, active_source=active_source)
     except LeagueNotImported as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

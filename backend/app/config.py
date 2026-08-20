@@ -69,6 +69,13 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("FWR_FANTASYPROS_API_KEY", "FANTASYPROS_API_KEY"),
     )
 
+    #: Compare Sleeper's projections against the existing source. When on, the
+    #: board is built from Sleeper's raw component projections re-scored under
+    #: this league's rules -- used *exclusively*, never blended with ESPN or
+    #: FantasyPros. Off by default, and off preserves current behaviour exactly.
+    #: Resolved per user (see `runtime_config.settings_for_user`).
+    use_sleeper_projections: bool = False
+
     # --- Draft ------------------------------------------------------------
     my_team_id: int | None = None
     my_team_name: str | None = None

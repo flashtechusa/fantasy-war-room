@@ -99,8 +99,19 @@ def _blend_raw_stats(
     return ({k: round(v, 3) for k, v in blended.items()}, round(fallback_points, 2))
 
 
-def build_engine(session: Session, league: League) -> ValuationEngine:
-    """Cached ValuationEngine for a league."""
+def build_engine(
+    session: Session, league: League, active_source: str | None = None
+) -> ValuationEngine:
+    """Cached ValuationEngine for a league.
+
+    `active_source` selects the projection source explicitly. `None` (the
+    default) keeps the historical behaviour exactly: every *enabled*
+    `ProjectionSource` is used, weighted-blended by `_blend_raw_stats`. A source
+    key (e.g. `"sleeper"`) switches to that one source **exclusively** -- it is
+    used regardless of its `enabled` flag, and no other source contributes. This
+    is the seam a future projection-source selector or weighted blend extends;
+    today it only ever picks one source or the default blend, never merges them.
+    """
     latest_player = session.scalars(
         select(Player.updated_at)
         .where(Player.season == league.season, Player.source == league.source)
@@ -112,20 +123,27 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
         league.imported_at,
         latest_player,
         league.source,
+        active_source or "",
         tuple(sorted((r.stat_id, r.points) for r in league.scoring_rules)),
     )
     cached = _cache.get(key)
     if cached is not None:
         return cached.engine
 
-    weights = {
-        source.key: source.weight
-        for source in session.scalars(
-            select(ProjectionSource).where(ProjectionSource.enabled.is_(True))
-        ).all()
-    }
-    if not weights:
-        weights = {"espn": 1.0, "demo": 1.0}
+    if active_source:
+        # Exclusive: this one source only, whatever its enabled flag says.
+        weights = {active_source: 1.0}
+        projection_source = active_source
+    else:
+        weights = {
+            source.key: source.weight
+            for source in session.scalars(
+                select(ProjectionSource).where(ProjectionSource.enabled.is_(True))
+            ).all()
+        }
+        if not weights:
+            weights = {"espn": 1.0, "demo": 1.0}
+        projection_source = "+".join(sorted(weights)) or "espn"
 
     # Scoped to the league's own provider. Real and synthetic players share one
     # season-keyed table, so without this a demo import puts fake players into
@@ -174,6 +192,7 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
         shape=league_shape(league),
         players=inputs,
         source=league.source,
+        projection_source=projection_source,
     )
     _cache[key] = _CacheEntry(key=key, engine=engine)
     # Bound it: a busy install should not accumulate an engine per league

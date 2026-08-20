@@ -108,6 +108,8 @@ export interface BoardMeta {
   scoring_format: string
   league_shape: string
   source: string
+  /** Which projection source produced these numbers: "espn", "sleeper", … */
+  projection_source: string
   market_drift: number
   current_pick: number
   next_pick: number | null
@@ -581,6 +583,19 @@ export interface ConfigSaveResult {
   connection: { connected: boolean; league_name?: string; detail?: string } | null
 }
 
+export interface SleeperStatus {
+  use_sleeper_projections: boolean
+  active_projection_source: string
+  sleeper: {
+    imported: boolean
+    players_matched: number
+    pool_size: number
+    coverage: number
+    updated_at?: string | null
+    scope: string
+  }
+}
+
 
 // --- Connect ESPN ---------------------------------------------------------
 
@@ -893,6 +908,20 @@ export const api = {
       enabled: boolean
       warning?: string
     }>('/api/league/projections/fantasypros', { method: 'POST' }),
+
+  sleeperStatus: () => request<SleeperStatus>('/api/league/projections/sleeper'),
+
+  toggleSleeper: (enabled: boolean) =>
+    request<SleeperStatus>('/api/league/projections/sleeper/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  importSleeper: () =>
+    request<{ matched: number; received: number; coverage: number; status: SleeperStatus }>(
+      '/api/league/projections/sleeper/import',
+      { method: 'POST' },
+    ),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),

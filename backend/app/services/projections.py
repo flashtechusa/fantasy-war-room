@@ -25,6 +25,13 @@ from ..projections.fantasypros import (
     FantasyProsPlayer,
 )
 from ..projections.matching import Candidate, PlayerMatcher
+from ..projections.sleeper import (
+    SOURCE_KEY as SLEEPER_SOURCE_KEY,
+)
+from ..projections.sleeper import (
+    SOURCE_LABEL as SLEEPER_SOURCE_LABEL,
+)
+from ..projections.sleeper import SleeperProjectionsClient
 
 log = logging.getLogger(__name__)
 
@@ -171,5 +178,54 @@ def import_fantasypros(
         report["matched"],
         coverage * 100,
         report["enabled"],
+    )
+    return report
+
+
+def import_sleeper(
+    session: Session,
+    league: League,
+    *,
+    week: int | None = None,
+    transport=None,
+) -> dict:
+    """Fetch and store Sleeper's raw component projections for one league.
+
+    Isolated on purpose. The Sleeper `ProjectionSource` is stored **disabled**
+    so it never enters the default weighted blend -- with the toggle OFF the
+    board is exactly what it was. It is consumed only when the board is built in
+    Sleeper-exclusive mode (see `board.build_engine(active_source="sleeper")`),
+    which re-scores these raw stats under the league's own rules. This does not
+    average, merge, or blend Sleeper with any other source.
+    """
+    # Stored disabled: this must never join the default blend. Exclusive mode
+    # selects it explicitly regardless of this flag.
+    source = ensure_source(session, SLEEPER_SOURCE_KEY, SLEEPER_SOURCE_LABEL, weight=1.0)
+    source.enabled = False
+
+    client = SleeperProjectionsClient(season=league.season, transport=transport)
+    players = client.projections(week=week)
+    report = store_projections(session, league, players, SLEEPER_SOURCE_KEY)
+
+    pool_size = session.scalar(
+        select(func.count(Player.id)).where(
+            Player.season == league.season, Player.source == league.source
+        )
+    ) or 0
+    coverage = (report["matched"] / pool_size) if pool_size else 0.0
+    report["pool_size"] = pool_size
+    report["coverage"] = round(coverage, 3)
+    # Never blended, so no coverage gate: partial coverage is fine because
+    # unmatched players fall back to the existing projection rather than being
+    # averaged into a distorted pool.
+    report["enabled"] = False
+    report["scope"] = "Offensive skill positions (QB/RB/WR/TE). K and D/ST keep the existing source."
+
+    session.flush()
+    log.info(
+        "Sleeper import: %s received, %s matched, %.0f%% coverage (stored, isolated)",
+        report["received"],
+        report["matched"],
+        coverage * 100,
     )
     return report

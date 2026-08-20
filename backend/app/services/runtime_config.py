@@ -153,9 +153,16 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
     base = effective_settings(session, base)
     config = user_config(session, user)
 
+    # Per-user projection-source opt-in, applied regardless of whether the user
+    # has their own league (owners use the install league but still choose their
+    # own projection source). A comparison switch, off by default.
+    use_sleeper = bool(getattr(config, "use_sleeper_projections", False)) if config else False
+
     is_owner = getattr(user, "role", None) == "owner"
     if config is None or config.espn_league_id is None:
         if is_owner:
+            if use_sleeper and not base.use_sleeper_projections:
+                return base.model_copy(update={"use_sleeper_projections": True})
             return base
         # Blank out the inherited connection rather than passing it through.
         stripped = base.model_dump()
@@ -192,6 +199,8 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
     if config.espn_league_id is not None:
         merged["demo_mode"] = False
 
+    merged["use_sleeper_projections"] = use_sleeper or base.use_sleeper_projections
+
     return Settings.model_validate(merged)
 
 
@@ -226,3 +235,20 @@ def save_user_config(session: Session, user, values: dict) -> "UserEspnConfig":
 
     session.flush()
     return config
+
+
+def set_use_sleeper_projections(session: Session, user, enabled: bool) -> bool:
+    """Persist this user's projection-source choice. Returns the stored value.
+
+    Creates the per-user config row if the user does not have one yet -- a
+    client with no ESPN connection can still opt into the comparison.
+    """
+    from ..models import UserEspnConfig
+
+    config = user_config(session, user)
+    if config is None:
+        config = UserEspnConfig(user_id=user.id)
+        session.add(config)
+    config.use_sleeper_projections = bool(enabled)
+    session.commit()
+    return config.use_sleeper_projections

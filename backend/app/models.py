@@ -466,6 +466,10 @@ class UserEspnConfig(Base):
     #: SWID to this team. A public/self-asserted selection is *not* verified and
     #: must never be treated as proof that this user manages the team.
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Per-user opt-in to build the board from Sleeper's projections (re-scored
+    #: under the league's rules) instead of the default source. Off preserves
+    #: current behaviour; it is a comparison switch, not a blend.
+    use_sleeper_projections: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

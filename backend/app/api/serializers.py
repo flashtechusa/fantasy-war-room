@@ -215,6 +215,7 @@ def serialize_board_meta(board: BoardResult) -> dict:
         "scoring_format": board.scoring_format,
         "league_shape": board.league_shape,
         "source": board.generated_from,
+        "projection_source": board.projection_source,
         "market_drift": board.market_drift,
         "current_pick": board.current_pick,
         "next_pick": board.next_pick,

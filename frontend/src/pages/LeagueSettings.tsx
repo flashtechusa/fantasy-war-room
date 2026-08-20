@@ -272,6 +272,115 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
 }
 
 /**
+ * Sleeper projections as an isolated, opt-in comparison source.
+ *
+ * Deliberately not a blend. When on, the board is built from Sleeper's raw
+ * component projections re-scored under this league's rules, used exclusively;
+ * off restores the default source exactly. The toggle is per-user, so two
+ * people can compare independently. Needs no key -- Sleeper's API is open.
+ */
+function SleeperCard({ onChanged }: { onChanged: () => void }) {
+  const status = useAsync(() => api.sleeperStatus(), [])
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const s = status.data
+  const on = Boolean(s?.use_sleeper_projections)
+
+  async function toggle() {
+    setBusy(true)
+    setNote(null)
+    try {
+      const next = await api.toggleSleeper(!on)
+      setNote(
+        next.use_sleeper_projections
+          ? {
+              ok: true,
+              text: `On. The board now uses Sleeper — ${next.sleeper.players_matched} players re-scored under your rules (${Math.round(
+                next.sleeper.coverage * 100,
+              )}% of your pool).`,
+            }
+          : { ok: true, text: 'Off. Back to the default projection source.' },
+      )
+      status.reload()
+      onChanged()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function refresh() {
+    setBusy(true)
+    setNote(null)
+    try {
+      const report = await api.importSleeper()
+      setNote({
+        ok: true,
+        text: `Refreshed. Matched ${report.matched} of ${report.received} Sleeper players (${Math.round(
+          report.coverage * 100,
+        )}% of your pool).`,
+      })
+      status.reload()
+      onChanged()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="Sleeper projections (optional)">
+      <div className="small muted" style={{ marginBottom: 10 }}>
+        A side-by-side comparison against the current numbers. When on, the board
+        is built <strong>only</strong> from Sleeper's projections, re-scored under
+        your league's rules — never blended or averaged with ESPN/FantasyPros. Off
+        restores the current board exactly. Covers QB/RB/WR/TE; kickers and D/ST
+        stay on the existing source. No key needed.
+      </div>
+
+      <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+        <button
+          className={`btn block ${on ? 'primary' : ''}`}
+          onClick={toggle}
+          disabled={busy || status.loading}
+        >
+          {busy
+            ? 'Working…'
+            : on
+              ? 'Use Sleeper Projections: ON'
+              : 'Use Sleeper Projections: OFF'}
+        </button>
+        {s?.sleeper.imported && (
+          <button className="btn block" onClick={refresh} disabled={busy}>
+            Refresh Sleeper data
+          </button>
+        )}
+      </div>
+
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        Active projection source:{' '}
+        <strong>{on ? 'Sleeper' : 'Default (ESPN / FantasyPros)'}</strong>
+        {s?.sleeper.imported && (
+          <>
+            {' '}· Sleeper covers {s.sleeper.players_matched} of {s.sleeper.pool_size}{' '}
+            players ({Math.round(s.sleeper.coverage * 100)}%).
+          </>
+        )}
+      </div>
+
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * In-app update.
  *
  * The app is usually running somewhere you only have a browser, so shipping a
@@ -516,6 +625,8 @@ export default function LeagueSettings({
       <PasswordCard />
 
       {isOwner && <FantasyProsCard onImported={() => onChange?.()} />}
+
+      <SleeperCard onChanged={() => onChange?.()} />
 
       <EspnConnectionCard />
 

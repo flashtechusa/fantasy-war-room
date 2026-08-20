@@ -95,7 +95,14 @@ export default function DraftBoard() {
       {meta && (
         <Card>
           <div className="row between small">
-            <span className="muted">{meta.scoring_format}</span>
+            <span className="muted">
+              {meta.scoring_format}
+              {meta.projection_source === 'sleeper' && (
+                <span className="method-badge" style={{ marginLeft: 8 }}>
+                  Sleeper projections
+                </span>
+              )}
+            </span>
             <span className="faint">
               Pick {meta.current_pick}
               {meta.next_pick ? ` · next at ${meta.next_pick}` : ''}
