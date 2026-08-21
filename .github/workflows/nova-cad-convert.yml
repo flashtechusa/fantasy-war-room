@@ -1,0 +1,55 @@
+name: Nova CAD Convert
+
+on:
+  push:
+    branches:
+      - cad/nova-lens-20mm
+    paths:
+      - '.github/workflows/nova-cad-convert.yml'
+      - 'cad_temp/nova_lens/**'
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout temp branch
+        uses: actions/checkout@v4
+
+      - name: Rebuild original DWG and verify
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p cad_temp/nova_lens/input cad_temp/nova_lens/output
+          cat $(find cad_temp/nova_lens -maxdepth 1 -name 'part_*.b64' | sort) | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
+          test "$(wc -c < cad_temp/nova_lens/input/nova_original.dwg)" -eq 18730
+          test "$(head -c 6 cad_temp/nova_lens/input/nova_original.dwg)" = 'AC1032'
+          sha256sum cad_temp/nova_lens/input/nova_original.dwg
+
+      - name: Install ODA File Converter
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget xvfb libxcb-util1 libxcb-cursor0 libxcb-shape0 libgl1 libfontconfig1 libxrender1 libxext6 libxkbcommon-x11-0
+          wget -O /tmp/oda.deb 'https://www.opendesign.com/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_8.3dll_27.1.deb'
+          sudo apt-get install -y /tmp/oda.deb || (sudo apt-get install -f -y && sudo dpkg -i /tmp/oda.deb)
+          command -v ODAFileConverter || true
+          find / -type f -name 'ODAFileConverter' -perm -111 2>/dev/null | head -20
+
+      - name: Convert DWG to DXF
+        shell: bash
+        run: |
+          set -euxo pipefail
+          EXE="$(command -v ODAFileConverter || find /opt /usr -type f -name ODAFileConverter -perm -111 2>/dev/null | head -1)"
+          test -n "$EXE"
+          xvfb-run -a "$EXE" "$GITHUB_WORKSPACE/cad_temp/nova_lens/input" "$GITHUB_WORKSPACE/cad_temp/nova_lens/output" ACAD2018 DXF 0 0 '*.dwg'
+          find cad_temp/nova_lens/output -maxdepth 2 -type f -ls
+          test -n "$(find cad_temp/nova_lens/output -type f -iname '*.dxf' -print -quit)"
+
+      - name: Upload converted DXF
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-original-dxf
+          path: cad_temp/nova_lens/output/*.dxf
+          if-no-files-found: error
