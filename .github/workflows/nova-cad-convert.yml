@@ -27,10 +27,19 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p cad_temp/nova_lens/input cad_temp/nova_lens/output
-          cat cad_temp/nova_lens/fix_00.b64 cad_temp/nova_lens/fix_01.b64 cad_temp/nova_lens/part_02.b64 cad_temp/nova_lens/part_03.b64 cad_temp/nova_lens/part_04.b64 cad_temp/nova_lens/fix_05.b64 cad_temp/nova_lens/part_06.b64 cad_temp/nova_lens/part_07.b64 cad_temp/nova_lens/part_08.b64 cad_temp/nova_lens/part_09.b64 | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
+          for f in cad_temp/nova_lens/m00_{0..4}.b64 cad_temp/nova_lens/m01_{0..4}.b64 cad_temp/nova_lens/m05_{0..4}.b64; do
+            test "$(wc -c < "$f")" -eq 500
+          done
+          cat \
+            cad_temp/nova_lens/m00_0.b64 cad_temp/nova_lens/m00_1.b64 cad_temp/nova_lens/m00_2.b64 cad_temp/nova_lens/m00_3.b64 cad_temp/nova_lens/m00_4.b64 \
+            cad_temp/nova_lens/m01_0.b64 cad_temp/nova_lens/m01_1.b64 cad_temp/nova_lens/m01_2.b64 cad_temp/nova_lens/m01_3.b64 cad_temp/nova_lens/m01_4.b64 \
+            cad_temp/nova_lens/part_02.b64 cad_temp/nova_lens/part_03.b64 cad_temp/nova_lens/part_04.b64 \
+            cad_temp/nova_lens/m05_0.b64 cad_temp/nova_lens/m05_1.b64 cad_temp/nova_lens/m05_2.b64 cad_temp/nova_lens/m05_3.b64 cad_temp/nova_lens/m05_4.b64 \
+            cad_temp/nova_lens/part_06.b64 cad_temp/nova_lens/part_07.b64 cad_temp/nova_lens/part_08.b64 cad_temp/nova_lens/part_09.b64 \
+            | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
           test "$(wc -c < cad_temp/nova_lens/input/nova_original.dwg)" -eq 18730
           test "$(head -c 6 cad_temp/nova_lens/input/nova_original.dwg)" = 'AC1032'
-          sha256sum cad_temp/nova_lens/input/nova_original.dwg
+          echo '723b02ed9fc0f0a06019ebbf2dd7018baab545b9bdb179c50c8f20a886d6fcab  cad_temp/nova_lens/input/nova_original.dwg' | sha256sum -c -
 
       - name: Install ODA File Converter
         shell: bash
