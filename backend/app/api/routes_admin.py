@@ -173,6 +173,40 @@ def reset_password(
     return {"user": _describe(user), "password": password}
 
 
+class TradeSendingToggle(BaseModel):
+    enabled: bool
+
+    model_config = {"extra": "forbid"}
+
+
+@router.get("/trade-sending")
+def get_trade_sending(
+    session: Session = Depends(get_db), _: User = Depends(owner_only)
+) -> dict:
+    """The install-wide kill switch state for sending trades to ESPN."""
+    from ..services.runtime_config import effective_settings
+
+    return {"enabled": bool(effective_settings(session).trades_send_enabled)}
+
+
+@router.post("/trade-sending")
+def set_trade_sending(
+    payload: TradeSendingToggle,
+    session: Session = Depends(get_db),
+    owner: User = Depends(owner_only),
+) -> dict:
+    """Turn the install-wide trade-sending kill switch on or off. Owner only.
+
+    Off is the default and blocks every account's sends immediately, whatever
+    their per-user capability says. This is the master control the owner holds.
+    """
+    from ..services.runtime_config import effective_settings, write_overrides
+
+    write_overrides(session, {"trades_send_enabled": bool(payload.enabled)})
+    log.info("Trade sending kill switch set to %s by %s", payload.enabled, owner.username)
+    return {"enabled": bool(effective_settings(session).trades_send_enabled)}
+
+
 @router.patch("/beta-requests/{request_id}")
 def mark_request(
     request_id: int,
