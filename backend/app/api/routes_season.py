@@ -14,6 +14,7 @@ from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
 from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
+from ..espn import trade_write
 from ..espn.client import EspnConnectionError, EspnNotConfigured
 from ..models import League
 from ..services import season as season_service
@@ -21,6 +22,7 @@ from ..services.board import league_shape
 from ..services.importer import import_free_agents
 from ..services.provider import build_provider
 from .deps import engine_dep, league_dep, settings_dep
+from .routes_auth import require_user
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/season", tags=["season"])
@@ -407,6 +409,101 @@ def trade_finder(
         "reason": result.get("reason"),
         "mutual": [_serialize_proposal(p) for p in result["mutual"]],
         "longshots": [_serialize_proposal(p) for p in result["longshots"]],
+    }
+
+
+class TradePreviewRequest(BaseModel):
+    their_team_id: int = Field(..., description="ESPN team id to propose the trade to.")
+    give_ids: list[int] = Field(default_factory=list, description="Player ids you send.")
+    receive_ids: list[int] = Field(default_factory=list, description="Player ids you receive.")
+
+
+def require_trade_sender(user=Depends(require_user)):
+    """Only accounts the owner has granted the trade-send capability get here."""
+    if not getattr(user, "can_send_trades", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Sending trades to ESPN is not enabled for your account.",
+        )
+    return user
+
+
+@router.post("/trade/preview")
+def trade_preview(
+    payload: TradePreviewRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_trade_sender),
+) -> dict:
+    """Stage 1 of send-to-ESPN: build the trade proposal and show it. Sends nothing.
+
+    Gated on the owner-granted capability. Returns the exact request that a live
+    send would make (method, url, body) plus a plain-English summary, so the
+    payload can be verified against a real league before any network write is
+    switched on. `sent` is always False here.
+    """
+    mine = season_service.my_team(session, league)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your team is not identified yet, so a trade cannot be addressed.",
+        )
+    their_team = next(
+        (t for t in league.teams if t.espn_team_id == payload.their_team_id), None
+    )
+    if their_team is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such team.")
+    if their_team.espn_team_id == mine.espn_team_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That is your own team.",
+        )
+
+    by_id = {p.espn_player_id: p for p in engine.players}
+
+    def resolve(ids: list[int]) -> list[trade_write.TradePlayer]:
+        out = []
+        for pid in ids:
+            p = by_id.get(pid)
+            if p is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Player {pid} is not in this league's pool.",
+                )
+            out.append(
+                trade_write.TradePlayer(
+                    espn_player_id=pid, name=p.name, position=p.position
+                )
+            )
+        return out
+
+    give = resolve(payload.give_ids)
+    receive = resolve(payload.receive_ids)
+    if not give and not receive:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A trade needs at least one player on one side.",
+        )
+
+    preview = trade_write.preview_trade(
+        season=league.season,
+        league_id=league.espn_league_id,
+        my_team_id=mine.espn_team_id,
+        my_team_name=mine.name,
+        their_team_id=their_team.espn_team_id,
+        their_team_name=their_team.name,
+        swid=settings.espn_swid,
+        give=give,
+        receive=receive,
+    )
+    return {
+        "send_enabled": trade_write.SEND_ENABLED,
+        "sent": preview.sent,
+        "summary": preview.summary,
+        "note": preview.note,
+        "request": {"method": preview.method, "url": preview.url, "body": preview.body},
     }
 
 

@@ -65,6 +65,7 @@ def _describe(user: User) -> dict:
         "username": user.username,
         "display_name": user.display_name or user.username,
         "role": user.role,
+        "can_send_trades": bool(getattr(user, "can_send_trades", False)),
     }
 
 

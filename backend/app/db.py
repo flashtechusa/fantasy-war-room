@@ -85,6 +85,9 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "projection_mode": "VARCHAR(20)",
         "fantasypros_api_key_encrypted": "VARCHAR(600)",
     },
+    "users": {
+        "can_send_trades": "BOOLEAN",
+    },
 }
 
 

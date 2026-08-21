@@ -403,6 +403,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(400), default="")
     role: Mapped[str] = mapped_column(String(20), default="owner")  # owner|partner|client
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    #: Owner-granted capability to send trade proposals to ESPN (a real write to
+    #: someone's league). Off by default and never self-serve -- only the owner
+    #: grants it, per account, in the admin screen. NULL reads as False.
+    can_send_trades: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
