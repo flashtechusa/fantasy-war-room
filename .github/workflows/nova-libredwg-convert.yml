@@ -34,7 +34,8 @@ jobs:
           cd /tmp/libredwg
           sh ./autogen.sh
           ./configure --disable-bindings --disable-docs
-          make -j"$(nproc)" programs/dwg2dxf
+          make -C src -j"$(nproc)"
+          make -C programs -j"$(nproc)" dwg2dxf
       - name: Convert DWG to DXF
         shell: bash
         run: |
