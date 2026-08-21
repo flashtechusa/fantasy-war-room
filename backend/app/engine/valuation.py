@@ -176,6 +176,10 @@ class BoardResult:
     scoring_format: str
     league_shape: str
     generated_from: str = "espn"
+    #: Which projection source produced these numbers ("espn", "sleeper",
+    #: "espn+fantasypros", ...). Distinct from `generated_from`, which is the
+    #: provider that built the player pool.
+    projection_source: str = "espn"
 
     def top(self, n: int = 10) -> list[PlayerValuation]:
         return [v for v in self.valuations if not v.is_drafted][:n]
@@ -224,9 +228,11 @@ class ValuationEngine:
         shape: LeagueShape,
         players: list[PlayerInput],
         source: str = "espn",
+        projection_source: str = "espn",
     ) -> None:
         self.scoring = scoring
         self.shape = shape
+        self.projection_source = projection_source
         self.players = [p for p in players if p.position in FANTASY_POSITIONS]
         self.source = source
 
@@ -446,6 +452,7 @@ class ValuationEngine:
             scoring_format=self.scoring.format_label,
             league_shape=self.shape.describe(),
             generated_from=self.source,
+            projection_source=self.projection_source,
         )
 
     # -- scarcity ----------------------------------------------------------

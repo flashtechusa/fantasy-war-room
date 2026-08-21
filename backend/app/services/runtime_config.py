@@ -153,10 +153,27 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
     base = effective_settings(session, base)
     config = user_config(session, user)
 
+    # Per-user projection source and key, applied regardless of whether the user
+    # has their own league (owners use the install league but still choose their
+    # own projection source). Default "espn" preserves the historical board.
+    mode = resolve_projection_mode(config)
+    fp_key = None
+    if config is not None and getattr(config, "fantasypros_api_key_encrypted", None):
+        fp_key = secret_store.decrypt(config.fantasypros_api_key_encrypted)
+
+    def _apply_user_projection(settings: Settings) -> Settings:
+        update: dict = {
+            "projection_mode": mode,
+            "use_sleeper_projections": mode == "sleeper",
+        }
+        if fp_key:
+            update["fantasypros_api_key"] = fp_key
+        return settings.model_copy(update=update)
+
     is_owner = getattr(user, "role", None) == "owner"
     if config is None or config.espn_league_id is None:
         if is_owner:
-            return base
+            return _apply_user_projection(base)
         # Blank out the inherited connection rather than passing it through.
         stripped = base.model_dump()
         stripped.update(
@@ -170,7 +187,7 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
             }
         )
         if config is None:
-            return Settings.model_validate(stripped)
+            return _apply_user_projection(Settings.model_validate(stripped))
         base = Settings.model_validate(stripped)
 
     merged = base.model_dump()
@@ -192,7 +209,7 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
     if config.espn_league_id is not None:
         merged["demo_mode"] = False
 
-    return Settings.model_validate(merged)
+    return _apply_user_projection(Settings.model_validate(merged))
 
 
 def save_user_config(session: Session, user, values: dict) -> "UserEspnConfig":
@@ -226,3 +243,78 @@ def save_user_config(session: Session, user, values: dict) -> "UserEspnConfig":
 
     session.flush()
     return config
+
+
+#: The projection sources a user may build their board from.
+PROJECTION_MODES = ("espn", "sleeper", "fantasypros", "consensus")
+
+
+def resolve_projection_mode(config) -> str:
+    """This user's stored projection mode, defaulting safely.
+
+    NULL/absent reads as "espn" (the native source), which is byte-identical to
+    the board before this option existed. A pre-existing `use_sleeper_projections`
+    flag with no explicit mode is honoured so an earlier opt-in is not lost.
+    """
+    mode = (getattr(config, "projection_mode", None) or "").strip().lower() if config else ""
+    if mode in PROJECTION_MODES:
+        return mode
+    if config is not None and getattr(config, "use_sleeper_projections", False):
+        return "sleeper"
+    return "espn"
+
+
+def _get_or_create_config(session: Session, user):
+    from ..models import UserEspnConfig
+
+    config = user_config(session, user)
+    if config is None:
+        config = UserEspnConfig(user_id=user.id)
+        session.add(config)
+    return config
+
+
+def set_projection_mode(session: Session, user, mode: str) -> str:
+    """Persist this user's projection-source choice. Returns the stored mode.
+
+    Creates the per-user config row if the user does not have one yet -- a
+    client with no ESPN connection can still choose a source. Keeps the legacy
+    `use_sleeper_projections` flag consistent so nothing reads the two apart.
+    """
+    normalised = (mode or "").strip().lower()
+    if normalised not in PROJECTION_MODES:
+        raise ValueError(
+            f"Unknown projection mode {mode!r}. Choose one of {', '.join(PROJECTION_MODES)}."
+        )
+    config = _get_or_create_config(session, user)
+    config.projection_mode = normalised
+    config.use_sleeper_projections = normalised == "sleeper"
+    session.commit()
+    return normalised
+
+
+def set_fantasypros_key(session: Session, user, api_key: str | None) -> bool:
+    """Store (or clear) this user's own FantasyPros key, encrypted. Returns set?
+
+    A blank/None key clears it. The raw key is never persisted -- only Fernet
+    ciphertext, exactly as the ESPN cookies are handled.
+    """
+    from ..services import secrets as secret_store
+
+    config = _get_or_create_config(session, user)
+    if api_key:
+        config.fantasypros_api_key_encrypted = secret_store.encrypt(api_key.strip())
+    else:
+        config.fantasypros_api_key_encrypted = None
+    session.commit()
+    return bool(config.fantasypros_api_key_encrypted)
+
+
+def has_fantasypros_key(config) -> bool:
+    return bool(config is not None and getattr(config, "fantasypros_api_key_encrypted", None))
+
+
+# Backward-compatible shim: earlier code/tests toggled Sleeper as a boolean.
+def set_use_sleeper_projections(session: Session, user, enabled: bool) -> bool:
+    set_projection_mode(session, user, "sleeper" if enabled else "espn")
+    return bool(enabled)

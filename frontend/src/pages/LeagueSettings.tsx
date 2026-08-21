@@ -148,124 +148,175 @@ function PasswordCard() {
 }
 
 /**
- * A second projection source, so everything does not rest on ESPN's numbers.
+ * Per-user projection source: ESPN, Sleeper, FantasyPros, or a consensus blend.
  *
- * Bring your own key: nothing is bundled, and the source stays inert until one
- * is entered. FantasyPros issue free keys for personal, non-commercial use, so
- * whether a given install may use this is a question for whoever holds the key.
+ * The choice is per-user, so two managers can view the same league under
+ * different projections. "ESPN" is the native board, byte-identical to before
+ * this existed. Sleeper needs no key. FantasyPros needs the user's own key,
+ * stored encrypted; a coverage line shows exactly how much of the roster it
+ * really covers so a thin source is never mistaken for a full one. Consensus
+ * blends whatever sources have data, per player.
  */
-function FantasyProsCard({ onImported }: { onImported: () => void }) {
-  const config = useAsync(() => api.config(), [])
-  const [key, setKey] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
-  const [covered, setCovered] = useState<string[]>([])
+const MODE_LABELS: Record<string, string> = {
+  espn: 'ESPN',
+  sleeper: 'Sleeper',
+  fantasypros: 'FantasyPros',
+  consensus: 'Consensus',
+}
 
-  const stored = Boolean(config.data?.fantasypros_key_set)
+const MODE_BLURB: Record<string, string> = {
+  espn: 'The native ESPN projections — the default, identical to the current board.',
+  sleeper: "Sleeper's projections, re-scored under your league's rules. No key needed.",
+  fantasypros: "Your own FantasyPros key, re-scored under your rules. Add the key below.",
+  consensus: 'An equal-weight blend of whatever sources you have imported, per player.',
+}
+
+function ProjectionSourceCard({ onChanged }: { onChanged: () => void }) {
+  const status = useAsync(() => api.projectionStatus(), [])
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+  const [fpKey, setFpKey] = useState('')
+
+  const s = status.data
+  const mode = s?.mode ?? 'espn'
+
+  async function choose(next: string) {
+    if (next === mode || busy) return
+    setBusy(true)
+    setNote(null)
+    try {
+      const res = await api.setProjectionMode(next as never)
+      setNote({ ok: true, text: `Now using ${MODE_LABELS[res.mode] ?? res.mode}.` })
+      status.reload()
+      onChanged()
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function saveKey() {
-    setSaving(true)
-    setResult(null)
+    setBusy(true)
+    setNote(null)
     try {
-      await api.saveConfig({ fantasypros_api_key: key.trim() })
-      setKey('')
-      // Confirm against the server rather than assuming: a save that is
-      // accepted but not stored is exactly the failure this had.
-      const after = await api.config()
-      if (after.fantasypros_key_set) {
-        setResult({ ok: true, text: 'Key saved. Import to pull projections.' })
-      } else {
-        setResult({ ok: false, text: 'The server did not store the key. Nothing was saved.' })
-      }
-      config.reload()
+      const res = await api.saveFantasyProsKey(fpKey, true)
+      setFpKey('')
+      const imp = res.import
+      setNote({
+        ok: true,
+        text: imp
+          ? `Key saved. FantasyPros matched ${imp.matched} of ${imp.received} players (${Math.round(
+              imp.coverage * 100,
+            )}% of your pool).${imp.warning ? ` ${imp.warning}` : ''}`
+          : 'Key saved.',
+      })
+      status.reload()
+      onChanged()
     } catch (error) {
-      setResult({ ok: false, text: (error as Error).message })
+      setNote({ ok: false, text: (error as Error).message })
     } finally {
-      setSaving(false)
+      setBusy(false)
     }
   }
 
-  async function runImport() {
-    setImporting(true)
-    setResult(null)
+  async function clearKey() {
+    setBusy(true)
+    setNote(null)
     try {
-      const report = await api.importFantasyPros()
-      const missed = report.unmatched_count + report.ambiguous_count
-      const base =
-        `Matched ${report.matched} of ${report.received} players` +
-        (missed ? `, ${missed} skipped` : '') +
-        ` — ${Math.round(report.coverage * 100)}% of your player pool.`
-      setCovered(report.matched_sample ?? [])
-      setResult({
-        // Partial coverage is not a success: the source is stored but not used.
-        ok: report.enabled,
-        text: report.warning ? `${base} ${report.warning}` : base,
-      })
-      onImported()
+      await api.saveFantasyProsKey(null, false)
+      setNote({ ok: true, text: 'FantasyPros key removed.' })
+      status.reload()
+      onChanged()
     } catch (error) {
-      setResult({ ok: false, text: (error as Error).message })
+      setNote({ ok: false, text: (error as Error).message })
     } finally {
-      setImporting(false)
+      setBusy(false)
     }
   }
+
+  const fpKeySet = Boolean(s?.fantasypros.key_set)
+  const fpOwnKey = Boolean(s?.fantasypros.own_key)
+  const fpKeyLabel = fpOwnKey ? '(your key set)' : fpKeySet ? '(install key in use)' : '(not set)'
 
   return (
-    <Card title="FantasyPros projections (optional)">
+    <Card title="Projection source">
       <div className="small muted" style={{ marginBottom: 10 }}>
-        A second opinion alongside ESPN's numbers. Their stat lines get re-scored under
-        your league's rules the same way, so this changes the inputs, not the method.
+        Which projections build your board. This is a per-user choice — it changes
+        what <strong>you</strong> see, not the league. {MODE_BLURB[mode]}
       </div>
 
-      <label className="tiny faint">
-        API key {stored && <span className="muted">(stored — leave blank to keep)</span>}
-      </label>
-      <input
-        type="password"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={stored ? '••••••••••••  (stored)' : 'Paste your FantasyPros API key'}
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        style={{ marginBottom: 10 }}
-      />
-      <div className="row" style={{ gap: 8 }}>
-        <button className="btn block" onClick={saveKey} disabled={saving || !key.trim()}>
-          {saving ? 'Saving…' : 'Save key'}
-        </button>
-        <button
-          className="btn primary block"
-          onClick={runImport}
-          disabled={importing || !stored}
-        >
-          {importing ? 'Importing…' : 'Import projections'}
-        </button>
+      <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {(s?.modes ?? ['espn', 'sleeper', 'fantasypros', 'consensus']).map((m) => (
+          <button
+            key={m}
+            className={`btn ${m === mode ? 'primary' : ''}`}
+            onClick={() => choose(m)}
+            disabled={busy || status.loading}
+          >
+            {MODE_LABELS[m] ?? m}
+          </button>
+        ))}
       </div>
 
-      <div className="tiny faint" style={{ marginTop: 8 }}>
-        Get a key at api.fantasypros.com. Free keys allow 50 requests a day and an import
-        uses six. The key is stored locally and never sent back to the browser.
-      </div>
-
-      {result && (
-        <div style={{ marginTop: 10 }}>
-          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
+      {s && (
+        <div className="tiny faint" style={{ marginTop: 8 }}>
+          Sleeper: {s.sleeper.imported
+            ? `${s.sleeper.players_matched}/${s.sleeper.pool_size} (${Math.round(
+                s.sleeper.coverage * 100,
+              )}%)`
+            : 'not imported'}
+          {' · '}
+          FantasyPros: {s.fantasypros.key_set
+            ? s.fantasypros.imported
+              ? `${s.fantasypros.players_matched}/${s.fantasypros.pool_size} (${Math.round(
+                  s.fantasypros.coverage * 100,
+                )}%)`
+              : 'key set, not imported'
+            : 'no key'}
         </div>
       )}
 
-      {covered.length > 0 && (
-        <details style={{ marginTop: 10 }}>
-          <summary className="small muted" style={{ cursor: 'pointer' }}>
-            Which {covered.length} players FantasyPros covered
-          </summary>
-          <div className="row wrap" style={{ gap: 5, marginTop: 8 }}>
-            {covered.map((name) => (
-              <span key={name} className="pill">
-                {name}
-              </span>
-            ))}
-          </div>
-        </details>
+      {s?.warnings?.map((w) => (
+        <div key={w} style={{ marginTop: 8 }}>
+          <Banner kind="info">{w}</Banner>
+        </div>
+      ))}
+
+      <div style={{ marginTop: 14, borderTop: '1px solid var(--line, #2a2a2a)', paddingTop: 12 }}>
+        <div className="small" style={{ marginBottom: 6 }}>
+          <strong>Your FantasyPros API key</strong>{' '}
+          <span className="faint">{fpKeyLabel}</span>
+        </div>
+        <div className="tiny muted" style={{ marginBottom: 8 }}>
+          {fpKeySet && !fpOwnKey
+            ? 'A key is already configured for this app, so FantasyPros and Consensus work now — no need to re-enter it. Add your own below only to override it for your account.'
+            : 'Bring your own key — stored encrypted, never shared. Saving it imports FantasyPros and reports how much of your roster it covers. Free keys only return the top of each position; the coverage number shows how much falls back to ESPN.'}
+        </div>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <input
+            className="input"
+            type="password"
+            placeholder={fpOwnKey ? '•••••••• (replace your key)' : 'Paste your FantasyPros API key'}
+            value={fpKey}
+            onChange={(e) => setFpKey(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button className="btn primary" onClick={saveKey} disabled={busy || !fpKey.trim()}>
+            Save &amp; test
+          </button>
+          {fpOwnKey && (
+            <button className="btn" onClick={clearKey} disabled={busy}>
+              Remove
+            </button>
+          )}
+        </div>
+      </div>
+
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
+        </div>
       )}
     </Card>
   )
@@ -454,15 +505,12 @@ function MyTeamPicker() {
 
 export default function LeagueSettings({
   onChange,
-  role = 'client',
 }: {
   onChange?: () => void
+  /** Accepted for compatibility with the parent; the projection source and
+   * connection cards are per-user, so this screen no longer branches on role. */
   role?: string
 }) {
-  // Install-wide settings belong to the owner. A client's League screen shows
-  // their own connection and nothing else -- otherwise saving here would
-  // change what every account without a connection of its own inherits.
-  const isOwner = role === 'owner'
   const health = useAsync(() => api.health(), [])
   const league = useAsync(() => api.league().catch(() => null), [])
   const history = useAsync(() => api.history().catch(() => null), [])
@@ -515,7 +563,7 @@ export default function LeagueSettings({
 
       <PasswordCard />
 
-      {isOwner && <FantasyProsCard onImported={() => onChange?.()} />}
+      <ProjectionSourceCard onChanged={() => onChange?.()} />
 
       <EspnConnectionCard />
 

@@ -108,6 +108,8 @@ export interface BoardMeta {
   scoring_format: string
   league_shape: string
   source: string
+  /** Which projection source produced these numbers: "espn", "sleeper", … */
+  projection_source: string
   market_drift: number
   current_pick: number
   next_pick: number | null
@@ -606,6 +608,51 @@ export interface ConfigSaveResult {
   connection: { connected: boolean; league_name?: string; detail?: string } | null
 }
 
+export interface SleeperStatus {
+  use_sleeper_projections: boolean
+  active_projection_source: string
+  sleeper: {
+    imported: boolean
+    players_matched: number
+    pool_size: number
+    coverage: number
+    updated_at?: string | null
+    scope: string
+  }
+}
+
+export type ProjectionMode = 'espn' | 'sleeper' | 'fantasypros' | 'consensus'
+
+export interface SourceCoverage {
+  imported: boolean
+  players_matched: number
+  pool_size: number
+  coverage: number
+  updated_at?: string | null
+  scope?: string
+  /** A usable key is configured (the user's own, or the pre-existing install key). */
+  key_set?: boolean
+  /** True only when the signed-in user stored their *own* key (vs the install key). */
+  own_key?: boolean
+  key_source?: 'you' | 'install' | null
+}
+
+export interface ProjectionStatus {
+  mode: ProjectionMode
+  modes: ProjectionMode[]
+  use_sleeper_projections: boolean
+  active_projection_source: string
+  sleeper: SourceCoverage
+  fantasypros: SourceCoverage
+  warnings: string[]
+}
+
+export interface FantasyProsKeyResult {
+  key_set: boolean
+  import: { matched: number; received: number; coverage: number; warning?: string } | null
+  status: ProjectionStatus
+}
+
 
 // --- Connect ESPN ---------------------------------------------------------
 
@@ -918,6 +965,35 @@ export const api = {
       enabled: boolean
       warning?: string
     }>('/api/league/projections/fantasypros', { method: 'POST' }),
+
+  sleeperStatus: () => request<SleeperStatus>('/api/league/projections/sleeper'),
+
+  toggleSleeper: (enabled: boolean) =>
+    request<SleeperStatus>('/api/league/projections/sleeper/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  importSleeper: () =>
+    request<{ matched: number; received: number; coverage: number; status: SleeperStatus }>(
+      '/api/league/projections/sleeper/import',
+      { method: 'POST' },
+    ),
+
+  // Unified projection-source selector (supersedes the Sleeper-only calls).
+  projectionStatus: () => request<ProjectionStatus>('/api/league/projections/status'),
+
+  setProjectionMode: (mode: ProjectionMode) =>
+    request<ProjectionStatus>('/api/league/projections/mode', {
+      method: 'POST',
+      body: JSON.stringify({ mode }),
+    }),
+
+  saveFantasyProsKey: (api_key: string | null, import_now = true) =>
+    request<FantasyProsKeyResult>('/api/league/projections/fantasypros/key', {
+      method: 'POST',
+      body: JSON.stringify({ api_key, import_now }),
+    }),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),

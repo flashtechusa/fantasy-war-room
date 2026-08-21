@@ -466,6 +466,21 @@ class UserEspnConfig(Base):
     #: SWID to this team. A public/self-asserted selection is *not* verified and
     #: must never be treated as proof that this user manages the team.
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Per-user opt-in to build the board from Sleeper's projections (re-scored
+    #: under the league's rules) instead of the default source. Superseded by
+    #: `projection_mode`; kept so an existing row's value is not lost and the
+    #: two stay consistent (mode "sleeper" <-> this True).
+    use_sleeper_projections: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: Which projection source this user's board is built from. One of
+    #: "espn" (the native ESPN/demo source, the default and byte-identical to
+    #: before this option existed), "sleeper", "fantasypros", or "consensus"
+    #: (an equal-weight blend of whatever sources have data for each player).
+    #: NULL on rows that predate the column and reads as "espn".
+    projection_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: This user's own FantasyPros API key, Fernet ciphertext -- never the raw
+    #: key. FantasyPros keys are issued per person under their own agreement, so
+    #: each user brings their own; it is never shared or returned by the API.
+    fantasypros_api_key_encrypted: Mapped[str | None] = mapped_column(String(600), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

@@ -79,7 +79,12 @@ DEMO_ID_RANGE = (100000, 100999)
 #: default until they are next written. Columns needing a data backfill (see
 #: `_backfill_player_source`) do not belong here.
 _ADDED_COLUMNS: dict[str, dict[str, str]] = {
-    "user_espn_config": {"verified": "BOOLEAN"},
+    "user_espn_config": {
+        "verified": "BOOLEAN",
+        "use_sleeper_projections": "BOOLEAN",
+        "projection_mode": "VARCHAR(20)",
+        "fantasypros_api_key_encrypted": "VARCHAR(600)",
+    },
 }
 
 

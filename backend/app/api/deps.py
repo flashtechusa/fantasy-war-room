@@ -54,9 +54,15 @@ def league_dep(
 def engine_dep(
     session: Session = Depends(get_db),
     league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
 ) -> ValuationEngine:
+    # Per-user projection source. "espn" (the default) is the native source and
+    # is byte-identical to before this option existed; "sleeper"/"fantasypros"
+    # pick one source with ESPN fallback per uncovered player; "consensus" blends
+    # whatever sources have data. Resolved from the user's saved projection_mode.
+    mode = settings.projection_mode or "espn"
     try:
-        return build_engine(session, league)
+        return build_engine(session, league, active_source=mode)
     except LeagueNotImported as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
