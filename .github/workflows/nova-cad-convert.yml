@@ -27,7 +27,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p cad_temp/nova_lens/input cad_temp/nova_lens/output
-          cat $(find cad_temp/nova_lens -maxdepth 1 -name 'raw_*.b64' | sort) | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
+          cat cad_temp/nova_lens/fix_00.b64 cad_temp/nova_lens/fix_01.b64 cad_temp/nova_lens/part_02.b64 cad_temp/nova_lens/part_03.b64 cad_temp/nova_lens/part_04.b64 cad_temp/nova_lens/fix_05.b64 cad_temp/nova_lens/part_06.b64 cad_temp/nova_lens/part_07.b64 cad_temp/nova_lens/part_08.b64 cad_temp/nova_lens/part_09.b64 | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
           test "$(wc -c < cad_temp/nova_lens/input/nova_original.dwg)" -eq 18730
           test "$(head -c 6 cad_temp/nova_lens/input/nova_original.dwg)" = 'AC1032'
           sha256sum cad_temp/nova_lens/input/nova_original.dwg
