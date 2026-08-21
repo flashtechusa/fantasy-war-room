@@ -538,12 +538,41 @@ export interface AccountRow {
   last_login_at: string | null
 }
 
+export interface DropCandidate {
+  espn_player_id: number
+  name: string
+  position: string
+  projected_points: number
+  vor: number
+  is_starter: boolean
+  lineup_impact: number
+  creates_hole: boolean
+  recommended: boolean
+}
+
+export interface RosterMove {
+  mine: {
+    team_id: number
+    team_name: string
+    current_size: number
+    resulting_size: number
+    limit: number
+    drops_required: number
+  }
+  theirs: RosterMove['mine']
+  requires_drop: boolean
+  their_overflow: boolean
+  recommended_ids: number[]
+  candidates: DropCandidate[]
+}
+
 export interface TradePreview {
   send_enabled: boolean
   sent: boolean
   summary: string
   note: string
   request: { method: string; url: string; body: unknown }
+  roster_move?: RosterMove
 }
 
 export interface TradeSendResult {
@@ -551,6 +580,7 @@ export interface TradeSendResult {
   status_code: number
   summary: string
   response: string
+  roster_move?: RosterMove
 }
 
 export interface MyConfig {
@@ -1141,6 +1171,7 @@ export const api = {
     give_ids: number[]
     receive_ids: number[]
     confirm: boolean
+    drop_ids?: number[]
   }) =>
     request<TradeSendResult>('/api/season/trade/send', {
       method: 'POST',

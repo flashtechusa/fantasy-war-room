@@ -124,11 +124,25 @@ function ProposalCard({
   const [confirming, setConfirming] = useState(false)
   const [sendBusy, setSendBusy] = useState(false)
   const [sendResult, setSendResult] = useState<import('../api').TradeSendResult | null>(null)
+  const [dropIds, setDropIds] = useState<Set<number>>(new Set())
 
   const ids = {
     their_team_id: proposal.their_team_id,
     give_ids: proposal.give.map((p) => p.espn_player_id),
     receive_ids: proposal.receive.map((p) => p.espn_player_id),
+  }
+
+  const move = preview?.roster_move
+  const needDrops = move?.mine.drops_required ?? 0
+  const dropsReady = needDrops === 0 || dropIds.size === needDrops
+
+  function toggleDrop(id: number) {
+    setDropIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < needDrops) next.add(id)
+      return next
+    })
   }
 
   async function doPreview() {
@@ -137,7 +151,10 @@ function ProposalCard({
     setSendResult(null)
     setConfirming(false)
     try {
-      setPreview(await api.tradePreview(ids))
+      const res = await api.tradePreview(ids)
+      setPreview(res)
+      // Pre-select the recommended drops so the safe choice is one tap away.
+      setDropIds(new Set(res.roster_move?.recommended_ids ?? []))
     } catch (e) {
       setPvErr((e as Error).message)
     } finally {
@@ -149,7 +166,7 @@ function ProposalCard({
     setSendBusy(true)
     setPvErr(null)
     try {
-      const res = await api.tradeSend({ ...ids, confirm: true })
+      const res = await api.tradeSend({ ...ids, confirm: true, drop_ids: Array.from(dropIds) })
       setSendResult(res)
       setConfirming(false)
     } catch (e) {
@@ -246,12 +263,73 @@ function ProposalCard({
             </pre>
           )}
 
+          {/* Roster move required — an uneven trade would overflow your roster. */}
+          {move?.requires_drop && (
+            <div
+              style={{
+                marginTop: 10,
+                padding: 10,
+                borderRadius: 8,
+                border: '1px solid var(--warn, #d8a657)',
+              }}
+            >
+              <div className="tiny" style={{ fontWeight: 700, color: 'var(--warn, #d8a657)' }}>
+                ROSTER MOVE REQUIRED
+              </div>
+              <div className="small" style={{ marginTop: 4 }}>
+                You have {move.mine.current_size}/{move.mine.limit}. This trade sends{' '}
+                {proposal.give.length} and receives {proposal.receive.length}, leaving you at{' '}
+                {move.mine.resulting_size}/{move.mine.limit}. Pick{' '}
+                <strong>{needDrops}</strong> player{needDrops === 1 ? '' : 's'} to drop
+                {' '}if it's accepted.
+              </div>
+              <div className="tiny faint" style={{ margin: '6px 0 4px' }}>
+                Selected {dropIds.size}/{needDrops}. Recommended picks are pre-checked.
+              </div>
+              {move.candidates.map((c) => (
+                <label
+                  key={c.espn_player_id}
+                  className="row"
+                  style={{ gap: 8, alignItems: 'center', padding: '3px 0', cursor: 'pointer' }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={dropIds.has(c.espn_player_id)}
+                    onChange={() => toggleDrop(c.espn_player_id)}
+                    disabled={!dropIds.has(c.espn_player_id) && dropIds.size >= needDrops}
+                  />
+                  <span className="small" style={{ flex: 1, minWidth: 0 }}>
+                    {c.name} <span className="faint">({c.position})</span>
+                    {c.recommended && (
+                      <span className="tiny" style={{ color: 'var(--good, #7ac07a)' }}> · recommended</span>
+                    )}
+                    {c.creates_hole && (
+                      <span className="tiny" style={{ color: 'var(--danger, #d66)' }}> · opens a hole</span>
+                    )}
+                    {c.is_starter && !c.creates_hole && (
+                      <span className="tiny faint"> · current starter</span>
+                    )}
+                  </span>
+                  <span className="tiny faint" style={{ whiteSpace: 'nowrap' }}>
+                    {c.projected_points.toFixed(0)} pts · VOR {c.vor.toFixed(0)}
+                  </span>
+                </label>
+              ))}
+              {move.their_overflow && (
+                <div className="tiny faint" style={{ marginTop: 6 }}>
+                  {move.theirs.team_name} would be at {move.theirs.resulting_size}/
+                  {move.theirs.limit}; ESPN has them make room when they accept.
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Send controls — a deliberate two-step, because this is irreversible. */}
           {!sendResult && (
             <div style={{ marginTop: 10, borderTop: '1px solid var(--line, #2a2a2a)', paddingTop: 10 }}>
               {!confirming ? (
-                <button className="btn sm" onClick={() => setConfirming(true)}>
-                  Send this to ESPN…
+                <button className="btn sm" disabled={!dropsReady} onClick={() => setConfirming(true)}>
+                  {dropsReady ? 'Send this to ESPN…' : `Select ${needDrops} drop(s) first`}
                 </button>
               ) : (
                 <div>
@@ -262,7 +340,7 @@ function ProposalCard({
                   <div className="row" style={{ gap: 8 }}>
                     <button
                       className="btn sm primary"
-                      disabled={sendBusy}
+                      disabled={sendBusy || !dropsReady}
                       onClick={doSend}
                     >
                       {sendBusy ? 'Sending…' : 'Confirm — send to ESPN'}

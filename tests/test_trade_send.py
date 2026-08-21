@@ -311,3 +311,88 @@ def test_kill_switch_is_owner_only(drafted_league):
         s.query(User).filter(User.username == "tester").first().role = "client"
     resp = drafted_league.post("/api/admin/trade-sending", json={"enabled": True})
     assert resp.status_code == 403
+
+
+# --- roster overflow (uneven trades) ---------------------------------------
+
+
+def _overflow_trade(client, receive_n):
+    """Give one of my players, receive N from another team -- overflows if N large."""
+    status = client.get("/api/espn/status").json()
+    my_team_id = status.get("my_team_id")
+    teams = client.get("/api/team/league").json()["teams"]
+    theirs = next(t for t in teams if t["espn_team_id"] != my_team_id)
+    their_roster = client.get(f"/api/season/roster?team_id={theirs['espn_team_id']}").json()
+    mine = client.get("/api/season/roster").json()
+    return {
+        "their_team_id": theirs["espn_team_id"],
+        "give_ids": [mine["players"][0]["espn_player_id"]],
+        "receive_ids": [p["espn_player_id"] for p in their_roster["players"][:receive_n]],
+    }
+
+
+def test_preview_reports_a_required_roster_move(drafted_league):
+    _grant_trade_send("tester", True)
+    body = _overflow_trade(drafted_league, 3)  # give 1, receive 3 -> +2 net
+    prev = drafted_league.post("/api/season/trade/preview", json=body).json()
+    move = prev["roster_move"]
+    assert move["requires_drop"] is True
+    assert move["mine"]["drops_required"] == move["mine"]["resulting_size"] - move["mine"]["limit"]
+    assert len(move["recommended_ids"]) == move["mine"]["drops_required"]
+    # Every recommended drop is one of the listed candidates.
+    cand_ids = {c["espn_player_id"] for c in move["candidates"]}
+    assert set(move["recommended_ids"]).issubset(cand_ids)
+
+
+def test_send_blocked_when_a_required_drop_is_not_confirmed(drafted_league, monkeypatch):
+    _grant_trade_send("tester", True)
+    _enable_global_sending(drafted_league)
+    _set_espn_cookies()
+    captured = _patch_send(monkeypatch)
+
+    body = {**_overflow_trade(drafted_league, 3), "confirm": True}  # no drop_ids
+    resp = drafted_league.post("/api/season/trade/send", json=body)
+    assert resp.status_code == 409
+    assert "Roster move required" in resp.json()["detail"]
+    assert not captured  # never posted to ESPN
+
+
+def test_multi_drop_confirmation_is_recorded_but_not_posted(drafted_league, monkeypatch):
+    _grant_trade_send("tester", True)
+    _enable_global_sending(drafted_league)
+    _set_espn_cookies()
+    captured = _patch_send(monkeypatch)
+
+    trade = _overflow_trade(drafted_league, 4)  # give 1, receive 4 -> +3 net -> 2 drops
+    prev = drafted_league.post("/api/season/trade/preview", json=trade).json()
+    assert prev["roster_move"]["mine"]["drops_required"] == 2
+    recs = prev["roster_move"]["recommended_ids"]
+    assert len(recs) == 2
+
+    # Too few drops confirmed -> still blocked.
+    one = drafted_league.post(
+        "/api/season/trade/send", json={**trade, "confirm": True, "drop_ids": recs[:1]}
+    )
+    assert one.status_code == 409
+
+    # Exactly the required drops -> recorded, not posted (encoding pending capture).
+    two = drafted_league.post(
+        "/api/season/trade/send", json={**trade, "confirm": True, "drop_ids": recs}
+    )
+    assert two.status_code == 200
+    assert two.json()["ok"] is False
+    assert "pending" in two.json()["response"].lower()
+    assert not captured  # never posted to ESPN
+
+
+def test_even_trade_needs_no_drop_and_still_sends(drafted_league, monkeypatch):
+    _grant_trade_send("tester", True)
+    _enable_global_sending(drafted_league)
+    _set_espn_cookies()
+    captured = _patch_send(monkeypatch)
+
+    body = {**_a_valid_trade(drafted_league), "confirm": True}  # 1-for-1, no overflow
+    resp = drafted_league.post("/api/season/trade/send", json=body)
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert captured  # the even trade was actually sent

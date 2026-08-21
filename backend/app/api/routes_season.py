@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db import get_db
+from ..engine.roster_move import active_roster_limit, analyse_roster_move
 from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
 from ..engine.waivers import explain_by_position, recommend_waivers
@@ -425,6 +426,11 @@ class TradeSendRequest(TradePreviewRequest):
     confirm: bool = Field(
         False, description="Must be true. A deliberate second step -- this sends a real proposal."
     )
+    drop_ids: list[int] = Field(
+        default_factory=list,
+        description="Player ids to drop if the trade overflows your roster. Required, "
+        "and exactly as many as the overflow, when a roster move is needed.",
+    )
 
 
 def require_trade_sender(user=Depends(require_user)):
@@ -482,6 +488,48 @@ def _resolve_trade(session, league, engine, their_team_id, give_ids, receive_ids
     return mine, their_team, give, receive
 
 
+def _roster_move(session, league, engine, mine, their_team, give_ids, receive_ids):
+    """Analyse whether this trade overflows either roster, and rank my safest drops."""
+    rosters = season_service.rosters_by_team(session, league)
+    return analyse_roster_move(
+        shape=engine.shape,
+        roster_limit=active_roster_limit(league.roster_slots, league.bench_slots),
+        my_team_id=mine.espn_team_id, my_team_name=mine.name,
+        their_team_id=their_team.espn_team_id, their_team_name=their_team.name,
+        my_current=engine.roster_players(rosters.get(mine.espn_team_id) or set()),
+        their_current=engine.roster_players(rosters.get(their_team.espn_team_id) or set()),
+        give=engine.roster_players(set(give_ids)),
+        receive=engine.roster_players(set(receive_ids)),
+    )
+
+
+def _serialize_roster_move(a) -> dict:
+    def team(t) -> dict:
+        return {
+            "team_id": t.team_id, "team_name": t.team_name,
+            "current_size": t.current_size, "resulting_size": t.resulting_size,
+            "limit": t.limit, "drops_required": t.drops_required,
+        }
+
+    return {
+        "mine": team(a.mine),
+        "theirs": team(a.theirs),
+        "requires_drop": a.mine.drops_required > 0,
+        "their_overflow": a.theirs.drops_required > 0,
+        "recommended_ids": a.recommended_ids,
+        "candidates": [
+            {
+                "espn_player_id": c.espn_player_id, "name": c.name, "position": c.position,
+                "projected_points": c.projected_points, "vor": c.vor,
+                "is_starter": c.is_starter, "lineup_impact": c.lineup_impact,
+                "creates_hole": c.creates_hole,
+                "recommended": c.espn_player_id in a.recommended_ids,
+            }
+            for c in a.candidates[:10]
+        ],
+    }
+
+
 @router.post("/trade/preview")
 def trade_preview(
     payload: TradePreviewRequest,
@@ -514,12 +562,16 @@ def trade_preview(
         # season opens. A hardcoded 0 is rejected with SCORINGPERIOD_NOT_CURRENT.
         scoring_period_id=_resolve_week(None, settings),
     )
+    move = _roster_move(
+        session, league, engine, mine, their_team, payload.give_ids, payload.receive_ids
+    )
     return {
         "send_enabled": trade_write.SEND_ENABLED,
         "sent": preview.sent,
         "summary": preview.summary,
         "note": preview.note,
         "request": {"method": preview.method, "url": preview.url, "body": preview.body},
+        "roster_move": _serialize_roster_move(move),
     }
 
 
@@ -632,6 +684,44 @@ def trade_send(
     if dupe is not None:
         refuse(status.HTTP_409_CONFLICT, "duplicate",
                "This exact proposal was already sent in the last 24 hours.")
+
+    # 6. Roster overflow (my side): ESPN rejects an over-limit trade with
+    #    TRAN_ROSTER_LIMIT_EXCEEDED unless a drop clears the room. Block it here
+    #    rather than send it and eat the 409, and require the user to have
+    #    confirmed exactly the drops the overflow needs. Encoding those drops into
+    #    ESPN's transaction body is deferred until the uneven-trade format is
+    #    captured, so an over-limit trade is not posted yet even once resolved.
+    move = _roster_move(
+        session, league, engine, mine, their_team, payload.give_ids, payload.receive_ids
+    )
+    if move.mine.drops_required > 0:
+        need = move.mine.drops_required
+        droppable = {c.espn_player_id for c in move.candidates}
+        chosen = [d for d in dict.fromkeys(payload.drop_ids) if d in droppable]
+        if len(chosen) != need:
+            refuse(
+                status.HTTP_409_CONFLICT, "roster_overflow",
+                f"Roster move required: this trade leaves you at "
+                f"{move.mine.resulting_size}/{move.mine.limit}. Select exactly "
+                f"{need} player(s) to drop, then send again.",
+            )
+        # Overflow resolved by the user's choice -- but the drop cannot yet be
+        # encoded into ESPN's body, so we do not POST an over-limit trade. Record
+        # the intent and tell the user plainly instead of triggering a 409.
+        _audit(session, user=user, league=league, mine=mine, their_team=their_team,
+               give=give, receive=receive, fp=fp, outcome="pending_drop", ok=False,
+               status_code=0, detail=f"drops confirmed: {chosen}")
+        return {
+            "ok": False,
+            "status_code": 0,
+            "summary": trade_write._summary(  # noqa: SLF001 - reuse the human summary
+                mine.name, their_team.name, give, receive),
+            "response": (
+                "Drop selection recorded. Submitting an over-limit trade to ESPN "
+                "is pending the uneven-trade format capture; even trades send now."
+            ),
+            "roster_move": _serialize_roster_move(move),
+        }
 
     # All guards cleared -- send.
     result = trade_write.send_trade(
