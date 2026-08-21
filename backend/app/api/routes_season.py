@@ -510,6 +510,9 @@ def trade_preview(
         swid=settings.espn_swid,
         give=give,
         receive=receive,
+        # ESPN requires the *current* scoring period on a trade; 1 before the
+        # season opens. A hardcoded 0 is rejected with SCORINGPERIOD_NOT_CURRENT.
+        scoring_period_id=_resolve_week(None, settings),
     )
     return {
         "send_enabled": trade_write.SEND_ENABLED,
@@ -642,6 +645,9 @@ def trade_send(
         espn_s2=settings.espn_s2,
         give=give,
         receive=receive,
+        # ESPN requires the *current* scoring period on a trade (1 pre-season);
+        # a wrong value returns 409 TRAN_INVALID_SCORINGPERIOD_NOT_CURRENT.
+        scoring_period_id=_resolve_week(None, settings),
     )
     _audit(session, user=user, league=league, mine=mine, their_team=their_team,
            give=give, receive=receive, fp=fp,
