@@ -121,21 +121,41 @@ function ProposalCard({
   const [pvBusy, setPvBusy] = useState(false)
   const [pvErr, setPvErr] = useState<string | null>(null)
   const [showPayload, setShowPayload] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [sendBusy, setSendBusy] = useState(false)
+  const [sendResult, setSendResult] = useState<import('../api').TradeSendResult | null>(null)
+
+  const ids = {
+    their_team_id: proposal.their_team_id,
+    give_ids: proposal.give.map((p) => p.espn_player_id),
+    receive_ids: proposal.receive.map((p) => p.espn_player_id),
+  }
 
   async function doPreview() {
     setPvBusy(true)
     setPvErr(null)
+    setSendResult(null)
+    setConfirming(false)
     try {
-      const res = await api.tradePreview({
-        their_team_id: proposal.their_team_id,
-        give_ids: proposal.give.map((p) => p.espn_player_id),
-        receive_ids: proposal.receive.map((p) => p.espn_player_id),
-      })
-      setPreview(res)
+      setPreview(await api.tradePreview(ids))
     } catch (e) {
       setPvErr((e as Error).message)
     } finally {
       setPvBusy(false)
+    }
+  }
+
+  async function doSend() {
+    setSendBusy(true)
+    setPvErr(null)
+    try {
+      const res = await api.tradeSend({ ...ids, confirm: true })
+      setSendResult(res)
+      setConfirming(false)
+    } catch (e) {
+      setPvErr((e as Error).message)
+    } finally {
+      setSendBusy(false)
     }
   }
 
@@ -224,6 +244,52 @@ function ProposalCard({
               {'\n'}
               {JSON.stringify(preview.request.body, null, 2)}
             </pre>
+          )}
+
+          {/* Send controls — a deliberate two-step, because this is irreversible. */}
+          {!sendResult && (
+            <div style={{ marginTop: 10, borderTop: '1px solid var(--line, #2a2a2a)', paddingTop: 10 }}>
+              {!confirming ? (
+                <button className="btn sm" onClick={() => setConfirming(true)}>
+                  Send this to ESPN…
+                </button>
+              ) : (
+                <div>
+                  <div className="small" style={{ marginBottom: 6 }}>
+                    This sends a <strong>real</strong> proposal to {proposal.their_label}. It
+                    cannot be undone from here.
+                  </div>
+                  <div className="row" style={{ gap: 8 }}>
+                    <button
+                      className="btn sm primary"
+                      disabled={sendBusy}
+                      onClick={doSend}
+                    >
+                      {sendBusy ? 'Sending…' : 'Confirm — send to ESPN'}
+                    </button>
+                    <button className="btn sm" disabled={sendBusy} onClick={() => setConfirming(false)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {sendResult && (
+            <div style={{ marginTop: 10 }}>
+              <Banner kind={sendResult.ok ? 'info' : 'error'}>
+                {sendResult.ok
+                  ? `Sent. ESPN accepted the proposal (HTTP ${sendResult.status_code}). Check it in the ESPN app.`
+                  : `ESPN did not accept it (HTTP ${sendResult.status_code}).`}
+              </Banner>
+              <pre
+                className="mono tiny"
+                style={{ marginTop: 6, overflowX: 'auto', whiteSpace: 'pre-wrap' }}
+              >
+                {sendResult.response}
+              </pre>
+            </div>
           )}
         </div>
       )}

@@ -27,6 +27,7 @@ OVERRIDABLE = {
     "my_draft_slot": int,
     "faab_remaining": int,
     "fantasypros_api_key": str,
+    "trades_send_enabled": bool,
 }
 
 #: Never returned by the API.

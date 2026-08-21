@@ -14,9 +14,12 @@ from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
 from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
+from datetime import timedelta
+
 from ..espn import trade_write
 from ..espn.client import EspnConnectionError, EspnNotConfigured
-from ..models import League
+from ..espn.redaction import redact
+from ..models import League, TradeSendLog, utcnow
 from ..services import season as season_service
 from ..services.board import league_shape
 from ..services.importer import import_free_agents
@@ -418,6 +421,12 @@ class TradePreviewRequest(BaseModel):
     receive_ids: list[int] = Field(default_factory=list, description="Player ids you receive.")
 
 
+class TradeSendRequest(TradePreviewRequest):
+    confirm: bool = Field(
+        False, description="Must be true. A deliberate second step -- this sends a real proposal."
+    )
+
+
 def require_trade_sender(user=Depends(require_user)):
     """Only accounts the owner has granted the trade-send capability get here."""
     if not getattr(user, "can_send_trades", False):
@@ -428,21 +437,12 @@ def require_trade_sender(user=Depends(require_user)):
     return user
 
 
-@router.post("/trade/preview")
-def trade_preview(
-    payload: TradePreviewRequest,
-    session: Session = Depends(get_db),
-    league: League = Depends(league_dep),
-    engine: ValuationEngine = Depends(engine_dep),
-    settings: Settings = Depends(settings_dep),
-    user=Depends(require_trade_sender),
-) -> dict:
-    """Stage 1 of send-to-ESPN: build the trade proposal and show it. Sends nothing.
+def _resolve_trade(session, league, engine, their_team_id, give_ids, receive_ids):
+    """Shared by preview and send: resolve my team, their team, and the players.
 
-    Gated on the owner-granted capability. Returns the exact request that a live
-    send would make (method, url, body) plus a plain-English summary, so the
-    payload can be verified against a real league before any network write is
-    switched on. `sent` is always False here.
+    Raises HTTPException on anything that would make the proposal malformed, so
+    both paths reject the same bad input identically -- the send never accepts
+    something the preview would not have shown.
     """
     mine = season_service.my_team(session, league)
     if mine is None:
@@ -450,15 +450,12 @@ def trade_preview(
             status_code=status.HTTP_409_CONFLICT,
             detail="Your team is not identified yet, so a trade cannot be addressed.",
         )
-    their_team = next(
-        (t for t in league.teams if t.espn_team_id == payload.their_team_id), None
-    )
+    their_team = next((t for t in league.teams if t.espn_team_id == their_team_id), None)
     if their_team is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such team.")
     if their_team.espn_team_id == mine.espn_team_id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That is your own team.",
+            status_code=status.HTTP_400_BAD_REQUEST, detail="That is your own team."
         )
 
     by_id = {p.espn_player_id: p for p in engine.players}
@@ -472,21 +469,37 @@ def trade_preview(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Player {pid} is not in this league's pool.",
                 )
-            out.append(
-                trade_write.TradePlayer(
-                    espn_player_id=pid, name=p.name, position=p.position
-                )
-            )
+            out.append(trade_write.TradePlayer(pid, p.name, p.position))
         return out
 
-    give = resolve(payload.give_ids)
-    receive = resolve(payload.receive_ids)
+    give = resolve(give_ids)
+    receive = resolve(receive_ids)
     if not give and not receive:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="A trade needs at least one player on one side.",
         )
+    return mine, their_team, give, receive
 
+
+@router.post("/trade/preview")
+def trade_preview(
+    payload: TradePreviewRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_trade_sender),
+) -> dict:
+    """Build the trade proposal and show it. Sends nothing; the SWID is masked.
+
+    Gated on the owner-granted capability. Returns the exact request a live send
+    would make (method, url, body) plus a plain-English summary, so the payload
+    can be verified before sending. `sent` is always False here.
+    """
+    mine, their_team, give, receive = _resolve_trade(
+        session, league, engine, payload.their_team_id, payload.give_ids, payload.receive_ids
+    )
     preview = trade_write.preview_trade(
         season=league.season,
         league_id=league.espn_league_id,
@@ -504,6 +517,145 @@ def trade_preview(
         "summary": preview.summary,
         "note": preview.note,
         "request": {"method": preview.method, "url": preview.url, "body": preview.body},
+    }
+
+
+#: A successfully sent, identical proposal within this window is treated as a
+#: duplicate and refused, so a double-tap or a retry cannot fire it twice.
+_DUPLICATE_WINDOW = timedelta(hours=24)
+
+
+def _audit(session, *, user, league, mine, their_team, give, receive, fp,
+           outcome, ok, status_code, detail):
+    """Record an attempt -- what was tried and how it went, never any credential."""
+    session.add(TradeSendLog(
+        user_id=getattr(user, "id", None),
+        username=getattr(user, "username", "") or "",
+        espn_league_id=league.espn_league_id,
+        season=league.season,
+        my_team_id=getattr(mine, "espn_team_id", None),
+        their_team_id=getattr(their_team, "espn_team_id", None),
+        give_ids=[p.espn_player_id for p in give],
+        receive_ids=[p.espn_player_id for p in receive],
+        fingerprint=fp,
+        outcome=outcome,
+        ok=ok,
+        status_code=status_code,
+        detail=redact(detail)[:500],
+    ))
+    session.commit()
+
+
+def _revalidate_rosters(session, league, mine, their_team, give, receive):
+    """Immediately before send: confirm each player is still where the trade says.
+
+    Rosters change -- a player you meant to give may already be gone, or the one
+    you want may have moved. Checked against the app's latest known rosters and
+    failed closed: if anything no longer lines up, the send is refused rather
+    than proposing a trade that cannot stand.
+    """
+    rosters = season_service.rosters_by_team(session, league)
+    mine_now = rosters.get(mine.espn_team_id) or set()
+    theirs_now = rosters.get(their_team.espn_team_id) or set()
+    gone_mine = [p.name for p in give if p.espn_player_id not in mine_now]
+    gone_theirs = [p.name for p in receive if p.espn_player_id not in theirs_now]
+    if gone_mine or gone_theirs:
+        problems = []
+        if gone_mine:
+            problems.append(f"no longer on your roster: {', '.join(gone_mine)}")
+        if gone_theirs:
+            problems.append(f"no longer on {their_team.name}: {', '.join(gone_theirs)}")
+        return "; ".join(problems)
+    return None
+
+
+@router.post("/trade/send")
+def trade_send(
+    payload: TradeSendRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_trade_sender),
+) -> dict:
+    """Stage 2: actually POST the trade proposal to ESPN. Irreversible.
+
+    Every send must clear, in order: the install-wide kill switch, the per-user
+    capability (already checked by the dependency), an explicit confirm, present
+    ESPN cookies, a fresh roster revalidation, and a duplicate check. Each attempt
+    -- allowed or refused -- is written to the audit log with no credentials, and
+    ESPN's raw (redacted) response is returned so a rejection is never silent.
+    """
+    # Resolve first so even a refused attempt is audited with real teams/players.
+    mine, their_team, give, receive = _resolve_trade(
+        session, league, engine, payload.their_team_id, payload.give_ids, payload.receive_ids
+    )
+    fp = trade_write.fingerprint(
+        season=league.season, league_id=league.espn_league_id,
+        my_team_id=mine.espn_team_id, their_team_id=their_team.espn_team_id,
+        give_ids=payload.give_ids, receive_ids=payload.receive_ids,
+    )
+
+    def refuse(code: int, outcome: str, detail: str):
+        _audit(session, user=user, league=league, mine=mine, their_team=their_team,
+               give=give, receive=receive, fp=fp, outcome=outcome, ok=False,
+               status_code=code, detail=detail)
+        raise HTTPException(status_code=code, detail=detail)
+
+    # 1. Kill switch -- install-wide, off by default, immediate.
+    if not settings.trades_send_enabled:
+        refuse(status.HTTP_403_FORBIDDEN, "disabled",
+               "Trade sending is switched off for this installation.")
+    # 2. Explicit confirmation.
+    if not payload.confirm:
+        refuse(status.HTTP_400_BAD_REQUEST, "unconfirmed",
+               "Confirm the send first -- this posts a real proposal to ESPN.")
+    # 3. Credentials present (never logged).
+    if not (settings.espn_swid and settings.espn_s2):
+        refuse(status.HTTP_409_CONFLICT, "no_credentials",
+               "Connect ESPN (SWID + espn_s2) before sending a trade.")
+    # 4. Roster revalidation, immediately before send.
+    problem = _revalidate_rosters(session, league, mine, their_team, give, receive)
+    if problem:
+        refuse(status.HTTP_409_CONFLICT, "roster_changed",
+               f"Rosters changed since you built this trade -- {problem}. Rebuild the preview.")
+    # 5. Duplicate protection: an identical proposal already sent recently.
+    dupe = session.query(TradeSendLog).filter(
+        TradeSendLog.fingerprint == fp,
+        TradeSendLog.outcome == "sent",
+        TradeSendLog.ok.is_(True),
+        TradeSendLog.created_at >= utcnow() - _DUPLICATE_WINDOW,
+    ).first()
+    if dupe is not None:
+        refuse(status.HTTP_409_CONFLICT, "duplicate",
+               "This exact proposal was already sent in the last 24 hours.")
+
+    # All guards cleared -- send.
+    result = trade_write.send_trade(
+        season=league.season,
+        league_id=league.espn_league_id,
+        my_team_id=mine.espn_team_id,
+        my_team_name=mine.name,
+        their_team_id=their_team.espn_team_id,
+        their_team_name=their_team.name,
+        swid=settings.espn_swid,
+        espn_s2=settings.espn_s2,
+        give=give,
+        receive=receive,
+    )
+    _audit(session, user=user, league=league, mine=mine, their_team=their_team,
+           give=give, receive=receive, fp=fp,
+           outcome="sent" if result.ok else "rejected", ok=result.ok,
+           status_code=result.status_code, detail=result.response)
+    log.info(
+        "User %s sent trade proposal to team %s: ok=%s status=%s",
+        getattr(user, "username", "?"), their_team.espn_team_id, result.ok, result.status_code,
+    )
+    return {
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "summary": result.summary,
+        "response": result.response,
     }
 
 

@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     #: "sleeper", "fantasypros", or "consensus". Resolved per user.
     projection_mode: str = "espn"
 
+    #: Install-wide master switch (kill switch) for sending trade proposals to
+    #: ESPN. OFF by default: no account can send until the owner turns it on, and
+    #: turning it off again immediately blocks all further sends. This is in
+    #: addition to the per-user `can_send_trades` capability and the per-send
+    #: confirmation -- all three must line up for a proposal to leave the app.
+    trades_send_enabled: bool = False
+
     # --- Draft ------------------------------------------------------------
     my_team_id: int | None = None
     my_team_name: str | None = None

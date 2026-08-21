@@ -546,6 +546,13 @@ export interface TradePreview {
   request: { method: string; url: string; body: unknown }
 }
 
+export interface TradeSendResult {
+  ok: boolean
+  status_code: number
+  summary: string
+  response: string
+}
+
 export interface MyConfig {
   configured: boolean
   espn_league_id: number | null
@@ -1080,6 +1087,14 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // Install-wide kill switch for sending trades to ESPN (owner only).
+  tradeSendingStatus: () => request<{ enabled: boolean }>('/api/admin/trade-sending'),
+  setTradeSending: (enabled: boolean) =>
+    request<{ enabled: boolean }>('/api/admin/trade-sending', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
   login: (username: string, password: string) =>
     request<AuthState>('/api/auth/login', {
       method: 'POST',
@@ -1113,9 +1128,21 @@ export const api = {
       `/api/season/trade-finder?horizon=${horizon}&include_longshots=${includeLongshots}`,
     ),
 
-  // Stage 1 of send-to-ESPN: build the proposal and show it. Sends nothing.
+  // Build the proposal and show it. Sends nothing; the SWID is masked.
   tradePreview: (body: { their_team_id: number; give_ids: number[]; receive_ids: number[] }) =>
     request<TradePreview>('/api/season/trade/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // Actually send the proposal to ESPN. Irreversible; requires confirm: true.
+  tradeSend: (body: {
+    their_team_id: number
+    give_ids: number[]
+    receive_ids: number[]
+    confirm: boolean
+  }) =>
+    request<TradeSendResult>('/api/season/trade/send', {
       method: 'POST',
       body: JSON.stringify(body),
     }),

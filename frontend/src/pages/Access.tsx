@@ -46,6 +46,7 @@ function Credentials({ username, password }: { username: string; password: strin
 export default function Access() {
   const requests = useAsync(() => api.betaRequests(), [])
   const users = useAsync(() => api.users(), [])
+  const tradeSending = useAsync(() => api.tradeSendingStatus(), [])
 
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -98,6 +99,15 @@ export default function Access() {
     try {
       await api.updateUser(user.id, { can_send_trades: !user.can_send_trades })
       users.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  async function toggleGlobalSending() {
+    try {
+      await api.setTradeSending(!tradeSending.data?.enabled)
+      tradeSending.reload()
     } catch (err) {
       setError((err as Error).message)
     }
@@ -209,6 +219,27 @@ export default function Access() {
         <div className="tiny faint" style={{ marginTop: 8 }}>
           A password is generated and shown once. It is stored hashed, so it
           cannot be looked up later — reset it instead.
+        </div>
+      </Card>
+
+      <Card title="Trade sending to ESPN (global kill switch)">
+        <div className="row between" style={{ alignItems: 'center', gap: 10 }}>
+          <div className="small" style={{ minWidth: 0 }}>
+            Master switch for the whole install. When <strong>off</strong>, no account
+            can send a trade proposal to ESPN, whatever their per-account permission
+            says — and turning it off again stops all sends immediately.
+          </div>
+          <button
+            className={`btn ${tradeSending.data?.enabled ? 'primary' : ''}`}
+            onClick={toggleGlobalSending}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {tradeSending.data?.enabled ? 'Sending: ON' : 'Sending: OFF'}
+          </button>
+        </div>
+        <div className="tiny faint" style={{ marginTop: 8 }}>
+          Off by default. Also required: the per-account “Send trades” permission
+          below, and an explicit confirmation on each send.
         </div>
       </Card>
 

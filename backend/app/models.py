@@ -443,6 +443,42 @@ class BetaRequest(Base):
     handled: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class TradeSendLog(Base):
+    """One attempt to send a trade proposal to ESPN -- the audit trail.
+
+    Deliberately records *what was attempted and how it went*, never *how it was
+    authenticated*: no SWID, no espn_s2, no cookies, no tokens. The `fingerprint`
+    identifies an identical proposal so a duplicate send can be refused, and the
+    outcome/status make every attempt (allowed, blocked, duplicate, rejected)
+    reconstructable after the fact.
+    """
+
+    __tablename__ = "trade_send_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    username: Mapped[str] = mapped_column(String(120), default="")
+    espn_league_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    my_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    their_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    give_ids: Mapped[list] = mapped_column(JSON, default=list)
+    receive_ids: Mapped[list] = mapped_column(JSON, default=list)
+    #: Stable hash of (season, league, teams, sorted player ids) -- for dup checks.
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    #: sent | duplicate | blocked | disabled | rejected | error
+    outcome: Mapped[str] = mapped_column(String(20), default="")
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    status_code: Mapped[int] = mapped_column(Integer, default=0)
+    #: Short, already-redacted note. Never contains credentials.
+    detail: Mapped[str] = mapped_column(String(500), default="")
+
+
 class UserEspnConfig(Base):
     """One user's ESPN connection.
 
