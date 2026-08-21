@@ -533,8 +533,17 @@ export interface AccountRow {
   display_name: string
   role: string
   enabled: boolean
+  can_send_trades: boolean
   created_at: string
   last_login_at: string | null
+}
+
+export interface TradePreview {
+  send_enabled: boolean
+  sent: boolean
+  summary: string
+  note: string
+  request: { method: string; url: string; body: unknown }
 }
 
 export interface MyConfig {
@@ -555,7 +564,12 @@ export interface ConnectionResult {
 
 export interface AuthState {
   authenticated: boolean
-  user: { username: string; display_name: string; role: string } | null
+  user: {
+    username: string
+    display_name: string
+    role: string
+    can_send_trades?: boolean
+  } | null
 }
 
 export class ApiError extends Error {
@@ -1051,7 +1065,10 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
-  updateUser: (id: number, body: { enabled?: boolean; role?: string }) =>
+  updateUser: (
+    id: number,
+    body: { enabled?: boolean; role?: string; can_send_trades?: boolean },
+  ) =>
     request<{ user: AccountRow }>(`/api/admin/users/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
@@ -1095,6 +1112,13 @@ export const api = {
     request<TradeFinderResponse>(
       `/api/season/trade-finder?horizon=${horizon}&include_longshots=${includeLongshots}`,
     ),
+
+  // Stage 1 of send-to-ESPN: build the proposal and show it. Sends nothing.
+  tradePreview: (body: { their_team_id: number; give_ids: number[]; receive_ids: number[] }) =>
+    request<TradePreview>('/api/season/trade/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 
   simulate: (body: { my_slot?: number; simulations?: number; seed?: number }) =>
     request<SimulationResponse>('/api/simulate', {

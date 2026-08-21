@@ -94,6 +94,15 @@ export default function Access() {
     }
   }
 
+  async function toggleTrades(user: AccountRow) {
+    try {
+      await api.updateUser(user.id, { can_send_trades: !user.can_send_trades })
+      users.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
   async function markHandled(row: BetaRequestRow) {
     await api.markBetaRequest(row.id, !row.handled)
     requests.reload()
@@ -210,6 +219,7 @@ export default function Access() {
               <tr>
                 <th>User</th>
                 <th>Role</th>
+                <th>Send trades</th>
                 <th>Last in</th>
                 <th />
               </tr>
@@ -228,6 +238,15 @@ export default function Access() {
                         OFF
                       </span>
                     )}
+                  </td>
+                  <td>
+                    <button
+                      className={`btn sm ${user.can_send_trades ? 'primary' : ''}`}
+                      onClick={() => toggleTrades(user)}
+                      title="Allow this account to send trade proposals to ESPN"
+                    >
+                      {user.can_send_trades ? 'On' : 'Off'}
+                    </button>
                   </td>
                   <td className="tiny faint">
                     {user.last_login_at
@@ -251,7 +270,9 @@ export default function Access() {
         </div>
         <div className="tiny faint" style={{ marginTop: 8 }}>
           Switching an account off ends its session immediately — they are signed
-          out of any browser they left open.
+          out of any browser they left open. “Send trades” lets an account build a
+          trade proposal to ESPN from the Trade screen; it is off by default and
+          currently preview-only (nothing is actually sent yet).
         </div>
       </Card>
     </>

@@ -57,6 +57,7 @@ class CreateUser(BaseModel):
 class UpdateUser(BaseModel):
     enabled: bool | None = None
     role: str | None = None
+    can_send_trades: bool | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -68,6 +69,7 @@ def _describe(user: User) -> dict:
         "display_name": user.display_name,
         "role": user.role,
         "enabled": user.enabled,
+        "can_send_trades": bool(getattr(user, "can_send_trades", False)),
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
     }
@@ -144,6 +146,12 @@ def update_user(
             # Switching an account off has to take effect now, not whenever
             # their session happens to expire.
             auth_service.revoke_all_for_user(session, user.id)
+    if payload.can_send_trades is not None:
+        user.can_send_trades = payload.can_send_trades
+        log.info(
+            "Trade-send capability for %s set to %s by %s",
+            user.username, payload.can_send_trades, owner.username,
+        )
     session.commit()
     return {"user": _describe(user)}
 

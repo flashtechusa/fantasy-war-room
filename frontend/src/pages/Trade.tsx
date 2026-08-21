@@ -107,14 +107,38 @@ function ProposalCard({
   horizon,
   onLoad,
   busy,
+  canSend = false,
 }: {
   proposal: TradeProposal
   horizon: 'season' | 'week'
   onLoad: (p: TradeProposal) => void
   busy: boolean
+  canSend?: boolean
 }) {
   const fmt = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(1)}`
   const horizonLabel = horizon === 'week' ? 'this week' : 'rest of season'
+  const [preview, setPreview] = useState<import('../api').TradePreview | null>(null)
+  const [pvBusy, setPvBusy] = useState(false)
+  const [pvErr, setPvErr] = useState<string | null>(null)
+  const [showPayload, setShowPayload] = useState(false)
+
+  async function doPreview() {
+    setPvBusy(true)
+    setPvErr(null)
+    try {
+      const res = await api.tradePreview({
+        their_team_id: proposal.their_team_id,
+        give_ids: proposal.give.map((p) => p.espn_player_id),
+        receive_ids: proposal.receive.map((p) => p.espn_player_id),
+      })
+      setPreview(res)
+    } catch (e) {
+      setPvErr((e as Error).message)
+    } finally {
+      setPvBusy(false)
+    }
+  }
+
   return (
     <div className="call" style={{ marginBottom: 10 }}>
       <div className="row between" style={{ alignItems: 'flex-start', gap: 10 }}>
@@ -149,14 +173,60 @@ function ProposalCard({
           ))}
         </ul>
       )}
-      <button
-        className="btn sm"
-        style={{ marginTop: 8 }}
-        disabled={busy}
-        onClick={() => onLoad(proposal)}
-      >
-        Load into analyzer →
-      </button>
+      <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+        <button className="btn sm" disabled={busy} onClick={() => onLoad(proposal)}>
+          Load into analyzer →
+        </button>
+        {canSend && (
+          <button className="btn sm" disabled={pvBusy} onClick={doPreview}>
+            {pvBusy ? 'Building…' : preview ? 'Rebuild preview' : 'Preview send to ESPN'}
+          </button>
+        )}
+      </div>
+
+      {pvErr && (
+        <div style={{ marginTop: 8 }}>
+          <Banner kind="error">{pvErr}</Banner>
+        </div>
+      )}
+
+      {preview && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: 10,
+            borderRadius: 8,
+            border: '1px solid var(--line, #2a2a2a)',
+          }}
+        >
+          <div className="tiny" style={{ fontWeight: 700, color: 'var(--warn, #d8a657)' }}>
+            PREVIEW ONLY — nothing was sent to ESPN
+          </div>
+          <div className="small" style={{ marginTop: 4 }}>
+            {preview.summary}
+          </div>
+          <div className="tiny faint" style={{ marginTop: 6 }}>
+            {preview.note}
+          </div>
+          <button
+            className="linklike tiny"
+            style={{ marginTop: 6 }}
+            onClick={() => setShowPayload((s) => !s)}
+          >
+            {showPayload ? 'Hide' : 'Show'} the exact request
+          </button>
+          {showPayload && (
+            <pre
+              className="mono tiny"
+              style={{ marginTop: 6, overflowX: 'auto', whiteSpace: 'pre-wrap' }}
+            >
+              {preview.request.method} {preview.request.url}
+              {'\n'}
+              {JSON.stringify(preview.request.body, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -171,6 +241,8 @@ function FoundTrades({
   const [horizon, setHorizon] = useState<'season' | 'week'>('season')
   const [showLongshots, setShowLongshots] = useState(false)
   const found = useAsync<TradeFinderResponse>(() => api.tradeFinder(horizon), [horizon])
+  const me = useAsync(() => api.me(), [])
+  const canSend = Boolean(me.data?.user?.can_send_trades)
 
   return (
     <Card title="Trades we found for you">
@@ -216,7 +288,14 @@ function FoundTrades({
       )}
 
       {found.data?.mutual.map((p, i) => (
-        <ProposalCard key={i} proposal={p} horizon={horizon} onLoad={onLoad} busy={busy} />
+        <ProposalCard
+          key={i}
+          proposal={p}
+          horizon={horizon}
+          onLoad={onLoad}
+          busy={busy}
+          canSend={canSend}
+        />
       ))}
 
       {found.data && found.data.longshots.length > 0 && (
@@ -233,6 +312,7 @@ function FoundTrades({
                 horizon={horizon}
                 onLoad={onLoad}
                 busy={busy}
+                canSend={canSend}
               />
             ))}
         </div>
