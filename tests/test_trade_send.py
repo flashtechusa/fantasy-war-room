@@ -20,18 +20,24 @@ from app.espn.redaction import SWID_PLACEHOLDER
 # --- the payload builder (pure) --------------------------------------------
 
 
-def test_build_body_has_unambiguous_direction():
+def test_build_body_matches_espns_trade_envelope():
     give = [trade_write.TradePlayer(espn_player_id=1, name="My RB", position="RB")]
     receive = [trade_write.TradePlayer(espn_player_id=99, name="Their WR", position="WR")]
     body = trade_write.build_trade_body(
         my_team_id=3, their_team_id=7, swid="{SWID}", give=give, receive=receive
     )
     assert body["type"] == "TRADE_PROPOSAL"
-    assert body["proposingTeamId"] == 3
-    assert body["acceptingTeamId"] == 7
+    assert body["teamId"] == 3
+    assert body["executionType"] == "EXECUTE"
+    # The counterparty is expressed only through item from/to -- not these fields.
+    assert "proposingTeamId" not in body and "acceptingTeamId" not in body
+    # Proposal-specific fields ESPN's web client includes.
+    assert body["comment"] == ""
+    assert body["expirationDate"].endswith("Z") and "T" in body["expirationDate"]
     # The player I give moves me -> them; the one I receive moves them -> me.
     give_item = next(i for i in body["items"] if i["playerId"] == 1)
     recv_item = next(i for i in body["items"] if i["playerId"] == 99)
+    assert give_item["type"] == "TRADE"
     assert (give_item["fromTeamId"], give_item["toTeamId"]) == (3, 7)
     assert (recv_item["fromTeamId"], recv_item["toTeamId"]) == (7, 3)
 
@@ -59,6 +65,7 @@ def test_send_posts_to_the_write_host_with_cookies_and_returns_the_response():
     def handler(request: httpx.Request) -> httpx.Response:
         seen["url"] = str(request.url)
         seen["cookie"] = request.headers.get("cookie", "")
+        seen["platform"] = request.headers.get("x-fantasy-platform", "")
         seen["body"] = request.read().decode()
         return httpx.Response(200, json={"id": "txn-123", "status": "PENDING"})
 
@@ -78,8 +85,12 @@ def test_send_posts_to_the_write_host_with_cookies_and_returns_the_response():
     assert "lm-api-writes.fantasy.espn.com" in seen["url"]
     # Cookies were attached; the real send carries the true SWID (not masked).
     assert "SWID={SWID}" in seen["cookie"] and "espn_s2=s2cookievalue" in seen["cookie"]
+    # Current ESPN web-client platform header (not the older kona-PROD form).
+    assert seen["platform"] == "espn-fantasy-web"
     # The real send carries the true member id (not the masked placeholder).
-    assert json.loads(seen["body"])["memberId"] == "{SWID}"
+    body = json.loads(seen["body"])
+    assert body["memberId"] == "{SWID}"
+    assert body["executionType"] == "EXECUTE" and "proposingTeamId" not in body
     assert "txn-123" in result.response
 
 

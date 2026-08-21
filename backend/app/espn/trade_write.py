@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -53,9 +54,24 @@ _WRITE_HEADERS = {
     "Content-Type": "application/json",
     "Accept": "application/json",
     "X-Fantasy-Source": "kona",
-    "X-Fantasy-Platform": "kona-PROD",
+    # ESPN's current (2026) web client identifies as espn-fantasy-web, not the
+    # older kona-PROD form. Confirmed by a Feb-2026 browser capture of a live
+    # write; the older value is a likely cause of a 400 "Invalid Input.".
+    "X-Fantasy-Platform": "espn-fantasy-web",
+    "Origin": "https://fantasy.espn.com",
+    "Referer": "https://fantasy.espn.com/",
 }
 _TIMEOUT = 20.0
+
+#: How far ahead a proposal's expiration is set, matching ESPN's own client
+#: (~two days). ESPN's write envelope requires this field.
+_EXPIRATION_AHEAD = timedelta(days=2)
+
+
+def _default_expiration() -> str:
+    """ESPN wants an ISO-8601 UTC expiry with milliseconds, e.g. 2026-08-23T17:08:00.000Z."""
+    when = datetime.now(timezone.utc) + _EXPIRATION_AHEAD
+    return when.strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 @dataclass
@@ -119,15 +135,23 @@ def build_trade_body(
     swid: str | None,
     give: list[TradePlayer],
     receive: list[TradePlayer],
+    scoring_period_id: int = 0,
+    expiration_date: str = "",
+    comment: str = "",
     mask_member: bool = False,
 ) -> dict:
-    """The transaction payload ESPN expects for a proposed trade.
+    """The transaction payload ESPN's 2026 web client sends to propose a trade.
 
     Each traded player is one item with an explicit from/to team, so the payload
     is unambiguous about direction: players I give move me -> them, players I
     receive move them -> me. `mask_member` replaces the SWID in the preview so a
     live session credential is never shown or logged; the real send builds it
     with the true SWID server-side.
+
+    Envelope fields mirror the reverse-engineered web-client shape: the
+    counterparty is expressed purely through each item's from/to team (no
+    proposing/accepting team fields), `executionType` is EXECUTE, and a proposal
+    also carries an `expirationDate` and a `comment`.
     """
     member = SWID_PLACEHOLDER if mask_member else ((swid or "").strip() or None)
     items = [
@@ -148,14 +172,15 @@ def build_trade_body(
         for p in receive
     ]
     return {
-        "type": "TRADE_PROPOSAL",
         "isLeagueManager": False,
-        "memberId": member,
         "teamId": my_team_id,
-        "proposingTeamId": my_team_id,
-        "acceptingTeamId": their_team_id,
+        "type": "TRADE_PROPOSAL",
+        "memberId": member,
+        "scoringPeriodId": scoring_period_id,
+        "executionType": "EXECUTE",
         "items": items,
-        "scoringPeriodId": 0,
+        "expirationDate": expiration_date or _default_expiration(),
+        "comment": comment or "",
     }
 
 
@@ -179,6 +204,8 @@ def preview_trade(
     swid: str | None,
     give: list[TradePlayer],
     receive: list[TradePlayer],
+    scoring_period_id: int = 0,
+    comment: str = "",
 ) -> TradePreview:
     """Stage 1: build the proposal and describe it. Sends nothing.
 
@@ -191,6 +218,8 @@ def preview_trade(
         swid=swid,
         give=give,
         receive=receive,
+        scoring_period_id=scoring_period_id,
+        comment=comment,
         mask_member=True,  # never show or log a live SWID
     )
     return TradePreview(
@@ -234,6 +263,8 @@ def send_trade(
     espn_s2: str | None,
     give: list[TradePlayer],
     receive: list[TradePlayer],
+    scoring_period_id: int = 0,
+    comment: str = "",
     transport: httpx.BaseTransport | None = None,
 ) -> SendResult:
     """Stage 2: actually POST the trade proposal to ESPN.
@@ -254,6 +285,8 @@ def send_trade(
         swid=swid,
         give=give,
         receive=receive,
+        scoring_period_id=scoring_period_id,
+        comment=comment,
     )
     headers = {
         **_WRITE_HEADERS,
