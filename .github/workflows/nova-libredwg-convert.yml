@@ -1,0 +1,51 @@
+name: Nova LibreDWG Convert
+
+on:
+  push:
+    branches: [cad/nova-lens-20mm]
+    paths:
+      - '.github/workflows/nova-libredwg-convert.yml'
+  pull_request:
+    branches: [claude/fantasy-war-room-app-n6edzt]
+    paths:
+      - '.github/workflows/nova-libredwg-convert.yml'
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild and verify original DWG
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p cad_temp/nova_lens/input cad_temp/nova_lens/output
+          for f in cad_temp/nova_lens/m00_{0..4}.b64 cad_temp/nova_lens/m01_{0..4}.b64 cad_temp/nova_lens/m05_{0..4}.b64; do test "$(wc -c < "$f")" -eq 500; done
+          cat cad_temp/nova_lens/m00_{0..4}.b64 cad_temp/nova_lens/m01_{0..4}.b64 cad_temp/nova_lens/part_02.b64 cad_temp/nova_lens/part_03.b64 cad_temp/nova_lens/part_04.b64 cad_temp/nova_lens/m05_{0..4}.b64 cad_temp/nova_lens/part_06.b64 cad_temp/nova_lens/part_07.b64 cad_temp/nova_lens/part_08.b64 cad_temp/nova_lens/part_09.b64 | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
+          echo '723b02ed9fc0f0a06019ebbf2dd7018baab545b9bdb179c50c8f20a886d6fcab  cad_temp/nova_lens/input/nova_original.dwg' | sha256sum -c -
+      - name: Build LibreDWG
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config git
+          git clone --depth 1 https://github.com/LibreDWG/libredwg.git /tmp/libredwg
+          cd /tmp/libredwg
+          sh ./autogen.sh
+          ./configure --disable-bindings --disable-docs
+          make -j"$(nproc)" programs/dwg2dxf
+      - name: Convert DWG to DXF
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export LD_LIBRARY_PATH=/tmp/libredwg/src/.libs:${LD_LIBRARY_PATH:-}
+          /tmp/libredwg/programs/dwg2dxf --as r2018 -y -o "$GITHUB_WORKSPACE/cad_temp/nova_lens/output/nova_original.dxf" "$GITHUB_WORKSPACE/cad_temp/nova_lens/input/nova_original.dwg"
+          test -s cad_temp/nova_lens/output/nova_original.dxf
+          head -20 cad_temp/nova_lens/output/nova_original.dxf
+      - name: Upload DXF
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-original-dxf-libredwg
+          path: cad_temp/nova_lens/output/nova_original.dxf
+          if-no-files-found: error
