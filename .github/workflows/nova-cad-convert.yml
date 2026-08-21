@@ -7,6 +7,12 @@ on:
     paths:
       - '.github/workflows/nova-cad-convert.yml'
       - 'cad_temp/nova_lens/**'
+  pull_request:
+    branches:
+      - claude/fantasy-war-room-app-n6edzt
+    paths:
+      - '.github/workflows/nova-cad-convert.yml'
+      - 'cad_temp/nova_lens/**'
   workflow_dispatch:
 
 jobs:
