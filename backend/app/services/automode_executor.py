@@ -16,7 +16,7 @@ from datetime import timedelta
 
 from ..engine.waivers import recommend_waivers
 from ..engine.weekly import BENCH_WARNING_STATUSES, optimise_lineup
-from ..espn.constants import NON_STARTER_SLOTS, SLOT_ID_TO_LABEL
+from ..espn.constants import SLOT_ID_TO_LABEL
 from ..espn.redaction import redact
 from ..espn.transaction_write import (
     build_freeagent_body,
@@ -30,6 +30,7 @@ from .board import league_shape
 from .provider import build_provider
 
 _SLOT_TO_ID = {label: slot_id for slot_id, label in SLOT_ID_TO_LABEL.items()}
+_SLOT_TO_ID["BN"] = 20  # defensive alias; ESPN normally normalises this to BE
 WIRE_DEPTH_PER_POSITION = 40
 _DUPLICATE_WINDOW = timedelta(hours=24)
 
@@ -66,8 +67,10 @@ def _recently_done(session, user, tier: str, summary: str) -> bool:
 
 def _current_week(settings) -> int:
     try:
+        # ESPN uses scoring period 1 during the football preseason even when
+        # some read surfaces still report 0.
         return max(1, int(build_provider(settings).current_week or 1))
-    except Exception:  # noqa: BLE001 - fail to week 1, ESPN still validates the write
+    except Exception:  # noqa: BLE001 - ESPN validates the eventual write
         return 1
 
 
@@ -97,21 +100,40 @@ def _lineup_moves(session, league, engine, week: int) -> tuple[list[tuple[int, i
     weekly = season_service.build_weekly_players(
         session, league, engine, week, espn_player_ids=set(current)
     )
+    by_weekly_id = {player.espn_player_id: player for player in weekly}
 
-    # Fail-safe automatic lineup policy: never promote a player ESPN says is
-    # unavailable, never promote a bye, and never automatically activate an IR
-    # player (doing that can require a roster drop). QUESTIONABLE remains usable.
-    candidates = []
-    for player in weekly:
-        slot = current.get(player.espn_player_id, "")
-        status = (player.injury_status or "").upper()
-        if slot in {"IR", "ER"}:
-            continue
-        if status in BENCH_WARNING_STATUSES or player.on_bye:
-            continue
-        candidates.append(player)
+    # If even one active-roster player is missing from our player/projection
+    # store, do nothing. Treating "unknown" as "bench" is unacceptable when
+    # the decision will be executed unattended.
+    expected = {pid for pid, slot in current.items() if slot not in {"IR", "ER"}}
+    missing = expected - set(by_weekly_id)
+    if missing:
+        return [], f"{len(missing)} roster player(s) are missing current data; lineup cycle held."
 
+    # Leave IR/ER alone. Activating one can require a separate roster move or
+    # drop. Everyone else participates in the weekly optimiser; ESPN OUT/bye
+    # players already carry zero weekly points, so a healthy replacement wins
+    # naturally. If the best legal lineup still contains an unavailable player,
+    # hold the cycle instead of making a partial/empty lineup.
+    candidates = [
+        player
+        for player in weekly
+        if current.get(player.espn_player_id, "") not in {"IR", "ER"}
+    ]
     optimal = optimise_lineup(candidates, league_shape(league), week)
+    unsafe = [
+        decision.player
+        for decision in optimal.starters
+        if decision.player is not None
+        and (
+            (decision.player.injury_status or "").upper() in BENCH_WARNING_STATUSES
+            or decision.player.on_bye
+        )
+    ]
+    if unsafe:
+        names = ", ".join(player.name for player in unsafe[:3])
+        return [], f"No fully safe lineup is available ({names}); lineup cycle held."
+
     target: dict[int, str] = {
         decision.player.espn_player_id: decision.slot
         for decision in optimal.starters
@@ -123,7 +145,7 @@ def _lineup_moves(session, league, engine, week: int) -> tuple[list[tuple[int, i
         if from_label in {"IR", "ER"}:
             continue
         to_label = target.get(pid, "BE")
-        if from_label == to_label:
+        if from_label == to_label or (from_label == "BN" and to_label == "BE"):
             continue
         from_id = _SLOT_TO_ID.get(from_label)
         to_id = _SLOT_TO_ID.get(to_label)
@@ -187,6 +209,15 @@ def _rank_wire(session, league, engine, settings, week: int):
     everyone = season_service.build_weekly_players(
         session, league, engine, week, availability={"FREEAGENT", "WAIVERS"}
     )
+
+    # Player.availability is season-global in the cache while ownership is
+    # league-specific. Fresh ESPN rosters are therefore the final authority:
+    # never offer an "available" cached player who is on any team in this league.
+    rostered_ids: set[int] = set()
+    for ids in season_service.rosters_by_team(session, league).values():
+        rostered_ids.update(ids)
+    everyone = [p for p in everyone if p.espn_player_id not in rostered_ids]
+
     by_position: dict[str, list] = {}
     for player in everyone:
         by_position.setdefault(player.position, []).append(player)
