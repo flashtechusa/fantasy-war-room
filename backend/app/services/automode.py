@@ -1,21 +1,14 @@
-"""Auto Mode -- autonomous team management, staged and dry-run first.
+"""Auto Mode planning surface.
 
-Auto Mode is the natural extension of everything the app already computes: the
-optimal lineup, the waiver ranker, the trade finder. What's new is *acting* on
-them on a schedule. Acting on ESPN is a write, and -- exactly like the trade
-sender -- the writes are staged:
+The live executor lives in :mod:`automode_executor`; this module stays pure and
+readable so the Auto tab can show what is enabled and what the system is trying
+to accomplish without performing a write merely because somebody opened the
+page.
 
-    NOW (this module): plan and log. Auto Mode decides what it *would* do and
-    records it, but performs no ESPN writes. The two write flags below are False
-    until each write's payload is captured from ESPN's own UI (lineup set,
-    add/drop, waiver claim), the same way the trade write was captured.
-
-    LATER: flip a write flag once its payload is verified, and that tier goes
-    live behind the same guardrails (install switch, per-user capability, the
-    user's own opt-in, an audit trail).
-
-So today Auto Mode is a safe, honest planner: it shows and logs the moves it
-would make. Nothing leaves the app.
+Lineup and wire transaction formats are now implemented and covered by payload
+tests.  Actual execution still requires all three gates: install-wide Auto Mode,
+the owner-granted per-user capability, and the user's own opt-in/tier toggles.
+Trades remain approval-only.
 """
 
 from __future__ import annotations
@@ -26,16 +19,15 @@ from ..engine.roster import build_optimal_lineup
 from ..models import AutoModeRun, League, UserEspnConfig
 from ..services import season as season_service
 
-#: Per-tier write master switches. Each stays False until that write's ESPN
-#: payload is captured and verified; while False the tier plans but never writes.
-LINEUP_WRITE_ENABLED = False
-WAIVER_WRITE_ENABLED = False
+#: The current ESPN write contracts implemented by the executor.
+LINEUP_WRITE_ENABLED = True
+WAIVER_WRITE_ENABLED = True
 #: Auto Mode never fires trades at leaguemates on its own -- trades are always
 #: surfaced for the user's one-tap approval, never auto-executed.
 TRADE_AUTO_EXECUTE = False
 
 #: Roster slots that are not starting spots.
-_BENCH_SLOTS = {"BE", "BN", "IR"}
+_BENCH_SLOTS = {"BE", "BN", "IR", "ER"}
 
 
 @dataclass
@@ -47,7 +39,7 @@ class Tiers:
 
 @dataclass
 class AutoPlan:
-    """What Auto Mode would do this cycle. Dry-run: nothing here was executed."""
+    """A read-only preview of what Auto Mode is configured to manage."""
 
     active: bool = False
     dry_run: bool = True
@@ -73,7 +65,7 @@ def is_active(*, install_on: bool, capable: bool, user_on: bool) -> bool:
 
 
 def _current_starter_ids(team) -> set[int]:
-    """Player ids ESPN currently has in a *starting* slot (not bench/IR)."""
+    """Player ids ESPN currently has in a starting slot (not bench/IR)."""
     out: set[int] = set()
     for entry in (getattr(team, "roster", None) or []):
         pid = entry.get("espn_player_id")
@@ -84,7 +76,7 @@ def _current_starter_ids(team) -> set[int]:
 
 
 def build_lineup_plan(engine, my_ids: set[int], current_starters: set[int]) -> dict:
-    """The optimal legal lineup vs what's currently started -- the moves to make."""
+    """Season-level headline for the Auto page; the executor recalculates weekly."""
     roster = engine.roster_players(my_ids)
     if not roster:
         return {"changes": [], "gain": 0.0, "note": "No roster yet."}
@@ -125,7 +117,7 @@ def build_plan(
     week: int,
     trade_headline: str | None = None,
 ) -> AutoPlan:
-    """Compute (never execute) what Auto Mode would do for this user right now."""
+    """Compute a preview of the tiers Auto Mode will manage."""
     capable = bool(getattr(user, "can_auto_mode", False))
     user_on = bool(getattr(config, "auto_mode", False)) if config else False
     active = is_active(install_on=install_on, capable=capable, user_on=user_on)
@@ -145,14 +137,21 @@ def build_plan(
     if tiers.lineup and mine is not None and my_ids:
         plan.lineup = build_lineup_plan(engine, my_ids, _current_starter_ids(mine))
         plan.lineup["write_enabled"] = LINEUP_WRITE_ENABLED
-        plan.lineup["status"] = "would_execute" if LINEUP_WRITE_ENABLED else "held_pending_capture"
+        plan.lineup["status"] = "ready"
+        plan.lineup["note"] = (
+            "The live cycle recalculates with week-specific projections and refuses "
+            "to auto-start bye/IR/out/doubtful players."
+        )
 
     if tiers.waivers:
         plan.waivers = {
             "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
             "write_enabled": WAIVER_WRITE_ENABLED,
-            "status": "held_pending_capture",
-            "note": "Ranked pickups are on the Waivers tab; autonomous claims need the ESPN capture.",
+            "status": "ready",
+            "note": (
+                "Each live cycle refreshes the wire, chooses the top positive-lineup "
+                "upgrade, and makes at most one add/claim within your FAAB cap."
+            ),
         }
 
     if tiers.trades:
@@ -166,19 +165,19 @@ def build_plan(
 
 
 def log_cycle(session, user, plan: AutoPlan) -> None:
-    """Write the activity rows for a planning cycle. Credential-free."""
+    """Record a preview cycle. Live outcomes are logged by the executor."""
     rows = []
     if plan.lineup is not None:
         if plan.lineup.get("already_optimal"):
-            summary = "Lineup already optimal -- no change."
+            summary = "Lineup preview: already optimal at the season-level view."
         else:
             summary = (
-                f"Would start {len(plan.lineup.get('start', []))}, "
-                f"sit {len(plan.lineup.get('sit', []))} (+{plan.lineup.get('gain', 0)} pts)."
+                f"Lineup preview: start {len(plan.lineup.get('start', []))}, "
+                f"sit {len(plan.lineup.get('sit', []))} (+{plan.lineup.get('gain', 0)} pts season-level)."
             )
-        rows.append(("lineup", plan.lineup.get("status", "planned"), summary))
+        rows.append(("lineup", "planned", summary))
     if plan.waivers is not None:
-        rows.append(("waivers", plan.waivers["status"], plan.waivers["note"]))
+        rows.append(("waivers", "planned", plan.waivers["note"]))
     if plan.trades is not None:
         head = plan.trades.get("headline") or "no qualifying trade"
         rows.append(("trades", plan.trades["status"], f"Trade suggestion: {head}"))
