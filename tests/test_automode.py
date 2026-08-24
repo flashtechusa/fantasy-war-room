@@ -1,12 +1,8 @@
-"""Auto Mode -- staged, dry-run, and gated three ways.
+"""Auto Mode -- live-capable, off by default, and gated three ways.
 
-The properties that keep autopilot safe:
-- Off by default: no plan runs until the install switch, the per-account
-  capability, and the user's own opt-in all line up.
-- Dry-run: even fully enabled, Auto Mode plans and logs but writes nothing to
-  ESPN (the write flags are False until each payload is captured).
-- The lineup planner produces real start/sit moves from the optimal lineup.
-- Only the owner flips the install switch or grants the capability.
+Lineup and wire write formats are implemented, but nothing can execute until
+the install switch, owner-granted account capability, and the user's own opt-in
+all line up. Trades remain recommendation/approval-only.
 """
 
 from __future__ import annotations
@@ -27,12 +23,9 @@ def _grant_auto_mode(client):
     assert r.status_code == 200 and r.json()["user"]["can_auto_mode"] is True
 
 
-# --- the write flags stay off (dry-run) ------------------------------------
-
-
-def test_writes_are_staged_off():
-    assert automode.LINEUP_WRITE_ENABLED is False
-    assert automode.WAIVER_WRITE_ENABLED is False
+def test_write_contracts_are_available_but_trades_still_need_approval():
+    assert automode.LINEUP_WRITE_ENABLED is True
+    assert automode.WAIVER_WRITE_ENABLED is True
     assert automode.TRADE_AUTO_EXECUTE is False
 
 
@@ -54,12 +47,11 @@ def test_auto_mode_is_off_by_default(drafted_league):
 
 
 def test_settings_opt_in_requires_capability(drafted_league):
-    # Turning on auto_mode without the granted capability is refused.
     resp = drafted_league.post("/api/season/automode/settings", json={"auto_mode": True})
     assert resp.status_code == 403
 
 
-def test_lineup_plan_is_computed_but_held_when_active(drafted_league):
+def test_lineup_plan_is_ready_when_active(drafted_league):
     _grant_auto_mode(drafted_league)
     ok = drafted_league.post(
         "/api/season/automode/settings", json={"auto_mode": True, "auto_lineup": True}
@@ -68,25 +60,29 @@ def test_lineup_plan_is_computed_but_held_when_active(drafted_league):
 
     body = drafted_league.get("/api/season/automode").json()
     assert body["plan"]["active"] is True
+    # GET is a preview and therefore never writes merely because the page was opened.
     assert body["plan"]["dry_run"] is True
     lineup = body["plan"]["lineup"]
     assert lineup is not None
-    # Staged: computed, but not written to ESPN.
-    assert lineup["write_enabled"] is False
-    assert lineup["status"] == "held_pending_capture"
-    # The fixture benches everyone, so the plan wants to start the optimal set.
+    assert lineup["write_enabled"] is True
+    assert lineup["status"] == "ready"
     assert lineup["start"] or lineup["already_optimal"]
 
-    # And the cycle was logged to the activity trail.
     activity = body["activity"]
     assert any(a["tier"] == "lineup" for a in activity)
+
+
+def test_manual_run_requires_user_opt_in(drafted_league):
+    _grant_auto_mode(drafted_league)
+    # Capability + global switch alone are deliberately insufficient.
+    resp = drafted_league.post("/api/season/automode/run")
+    assert resp.status_code == 409
 
 
 def test_admin_switch_and_capability_are_owner_only(drafted_league):
     from app.db import session_scope
     from app.models import User
 
-    # Works as owner.
     assert drafted_league.post("/api/admin/auto-mode", json={"enabled": True}).status_code == 200
 
     with session_scope() as s:
