@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -17,6 +18,7 @@ from sqlalchemy.orm import Session
 from .api import (
     routes_admin,
     routes_auth,
+    routes_automode_live,
     routes_config,
     routes_draft,
     routes_espn,
@@ -73,7 +75,21 @@ async def lifespan(app: FastAPI):
         settings.demo_mode,
         settings.espn_league_id or "unset",
     )
-    yield
+
+    # Installed for every deployment but inert unless all Auto Mode gates are
+    # enabled. It waits before its first pass so startup/import work is never
+    # raced, and re-checks the database kill switch on every pass.
+    from .services import automode_runner
+
+    automode_task = asyncio.create_task(
+        automode_runner.scheduler_loop(), name="fantasy-war-room-auto-mode"
+    )
+    try:
+        yield
+    finally:
+        automode_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await automode_task
 
 
 app = FastAPI(
@@ -145,6 +161,7 @@ app.include_router(routes_league.router)
 app.include_router(routes_players.router)
 app.include_router(routes_draft.router)
 app.include_router(routes_season.router)
+app.include_router(routes_automode_live.router)
 app.include_router(routes_team.router)
 app.include_router(routes_sim.router)
 
