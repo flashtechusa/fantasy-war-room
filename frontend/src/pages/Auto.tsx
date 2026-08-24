@@ -113,7 +113,7 @@ export default function Auto() {
 
         {!canOptIn && (
           <Banner kind="info">
-            Auto Mode isn't enabled for your account yet. Ask the league admin to
+            Auto Mode isn't enabled for your account yet. Ask your league admin to
             grant it on the Administration screen.
           </Banner>
         )}
@@ -165,7 +165,7 @@ export default function Auto() {
         )}
 
         {err && <div style={{ marginTop: 8 }}><Banner kind="error">{err}</Banner></div>}
-        {notice && <div style={{ marginTop: 8 }}><Banner kind="success">{notice}</Banner></div>}
+        {notice && <div style={{ marginTop: 8 }}><Banner kind="info">{notice}</Banner></div>}
 
         <div className="tiny faint" style={{ marginTop: 10 }}>
           When all three gates are on, lineup and wire tiers are live and the server
