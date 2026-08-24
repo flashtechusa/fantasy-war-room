@@ -1,21 +1,9 @@
-"""Auto Mode -- autonomous team management, staged and dry-run first.
+"""Auto Mode planning/status surface.
 
-Auto Mode is the natural extension of everything the app already computes: the
-optimal lineup, the waiver ranker, the trade finder. What's new is *acting* on
-them on a schedule. Acting on ESPN is a write, and -- exactly like the trade
-sender -- the writes are staged:
-
-    NOW (this module): plan and log. Auto Mode decides what it *would* do and
-    records it, but performs no ESPN writes. The two write flags below are False
-    until each write's payload is captured from ESPN's own UI (lineup set,
-    add/drop, waiver claim), the same way the trade write was captured.
-
-    LATER: flip a write flag once its payload is verified, and that tier goes
-    live behind the same guardrails (install switch, per-user capability, the
-    user's own opt-in, an audit trail).
-
-So today Auto Mode is a safe, honest planner: it shows and logs the moves it
-would make. Nothing leaves the app.
+Opening the Auto page computes and logs a preview; it never writes merely by
+being viewed.  Live execution is separate and requires every gate.  Lineup and
+wire writes are implemented; trade discovery can run automatically but sending
+a proposal always remains an approval action.
 """
 
 from __future__ import annotations
@@ -26,15 +14,8 @@ from ..engine.roster import build_optimal_lineup
 from ..models import AutoModeRun, League, UserEspnConfig
 from ..services import season as season_service
 
-#: Per-tier write master switches. Setting your own lineup is reversible and
-#: only touches your team, so it is the first write that is live: the user
-#: applies the optimal lineup to ESPN on demand from the Auto tab (a real write,
-#: behind the install switch, the per-user capability, and an explicit confirm).
-#: The remaining tiers stay False until each write's ESPN payload is captured.
 LINEUP_WRITE_ENABLED = True
-WAIVER_WRITE_ENABLED = False
-#: Auto Mode never fires trades at leaguemates on its own -- trades are always
-#: surfaced for the user's one-tap approval, never auto-executed.
+WAIVER_WRITE_ENABLED = True
 TRADE_AUTO_EXECUTE = False
 
 #: Roster slots that are not starting spots.
@@ -50,7 +31,7 @@ class Tiers:
 
 @dataclass
 class AutoPlan:
-    """What Auto Mode would do this cycle. Dry-run: nothing here was executed."""
+    """Readable preview of what enabled tiers are prepared to manage."""
 
     active: bool = False
     dry_run: bool = True
@@ -128,7 +109,7 @@ def build_plan(
     week: int,
     trade_headline: str | None = None,
 ) -> AutoPlan:
-    """Compute (never execute) what Auto Mode would do for this user right now."""
+    """Compute (never execute) what Auto Mode is configured to do."""
     capable = bool(getattr(user, "can_auto_mode", False))
     user_on = bool(getattr(config, "auto_mode", False)) if config else False
     active = is_active(install_on=install_on, capable=capable, user_on=user_on)
@@ -148,16 +129,21 @@ def build_plan(
     if tiers.lineup and mine is not None and my_ids:
         plan.lineup = build_lineup_plan(engine, my_ids, _current_starter_ids(mine))
         plan.lineup["write_enabled"] = LINEUP_WRITE_ENABLED
-        # Lineup writing is live and user-triggered: the plan shows the moves and
-        # the Apply button on the Auto tab performs the real ESPN write.
-        plan.lineup["status"] = "ready_to_apply" if LINEUP_WRITE_ENABLED else "held_pending_capture"
+        plan.lineup["status"] = "ready_to_apply" if LINEUP_WRITE_ENABLED else "held"
+        plan.lineup["note"] = (
+            "Manual Apply remains available; autonomous cycles use current-week projections "
+            "and fail closed on unsafe or incomplete roster data."
+        )
 
     if tiers.waivers:
         plan.waivers = {
             "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
             "write_enabled": WAIVER_WRITE_ENABLED,
-            "status": "held_pending_capture",
-            "note": "Ranked pickups are on the Waivers tab; autonomous claims need the ESPN capture.",
+            "status": "ready" if WAIVER_WRITE_ENABLED else "held",
+            "note": (
+                "Auto Mode refreshes the live wire, requires a meaningful upgrade, makes at "
+                "most one wire move per cycle, and never exceeds your FAAB cap."
+            ),
         }
 
     if tiers.trades:
@@ -165,20 +151,20 @@ def build_plan(
             "headline": trade_headline,
             "auto_execute": TRADE_AUTO_EXECUTE,
             "status": "needs_approval",
-            "note": "Auto Mode surfaces a trade for your one-tap approval; it never fires trades on its own.",
+            "note": "Auto Mode surfaces a trade for your approval; it never sends trades on its own.",
         }
     return plan
 
 
 def log_cycle(session, user, plan: AutoPlan) -> None:
-    """Write the activity rows for a planning cycle. Credential-free."""
+    """Write preview activity rows. Live outcomes are recorded by the executor."""
     rows = []
     if plan.lineup is not None:
         if plan.lineup.get("already_optimal"):
-            summary = "Lineup already optimal -- no change."
+            summary = "Lineup preview: already optimal."
         else:
             summary = (
-                f"Would start {len(plan.lineup.get('start', []))}, "
+                f"Lineup preview: start {len(plan.lineup.get('start', []))}, "
                 f"sit {len(plan.lineup.get('sit', []))} (+{plan.lineup.get('gain', 0)} pts)."
             )
         rows.append(("lineup", plan.lineup.get("status", "planned"), summary))
