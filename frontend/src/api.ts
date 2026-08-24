@@ -571,6 +571,14 @@ export interface LineupApplyResult {
   response: string
 }
 
+export interface WaiverApplyResult {
+  ok: boolean
+  status_code: number
+  kind: string
+  summary: string
+  response: string
+}
+
 export interface DropCandidate {
   espn_player_id: number
   name: string
@@ -1190,6 +1198,13 @@ export const api = {
     request<LineupApplyResult>('/api/season/lineup/apply', {
       method: 'POST',
       body: JSON.stringify({ confirm }),
+    }),
+
+  // Waiver add/drop (or FAAB claim) to ESPN, gated like Auto Mode's lineup write.
+  applyWaiver: (body: { add_id: number; drop_id?: number | null; bid?: number }) =>
+    request<WaiverApplyResult>('/api/season/waiver/apply', {
+      method: 'POST',
+      body: JSON.stringify({ ...body, confirm: true }),
     }),
 
   login: (username: string, password: string) =>

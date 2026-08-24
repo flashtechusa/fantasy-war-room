@@ -126,10 +126,10 @@ export default function Auto() {
         {err && <div style={{ marginTop: 8 }}><Banner kind="error">{err}</Banner></div>}
 
         <div className="tiny faint" style={{ marginTop: 10 }}>
-          <strong>Lineup writing is live</strong>: you can apply your optimal
-          lineup straight to ESPN below (a real, reversible write behind an
-          explicit confirm). Waivers and trades still plan and log only — those
-          turn on per tier once each ESPN write is verified.
+          <strong>Lineup and waiver writing are live</strong>: apply your optimal
+          lineup straight to ESPN below, and submit waiver pickups from the
+          Waivers tab — both real writes behind an explicit confirm. Trades stay
+          surfaced for your one-tap approval; Auto Mode never fires them on its own.
         </div>
       </Card>
 
@@ -214,7 +214,8 @@ export default function Auto() {
               <div style={{ fontWeight: 650 }}>Waivers</div>
               <div className="small muted">{s.plan.waivers.note}</div>
               <div className="tiny faint" style={{ marginTop: 2 }}>
-                FAAB cap per claim: ${s.plan.waivers.faab_max}. Held — pending ESPN capture.
+                FAAB cap per claim: ${s.plan.waivers.faab_max}. Submit each pickup
+                from the Waivers tab (Add to ESPN → Confirm).
               </div>
             </div>
           )}

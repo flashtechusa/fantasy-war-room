@@ -123,12 +123,12 @@ export default function Guide() {
         <div className="small muted">
           If your admin enables it for you, the <strong>Auto</strong> tab can run
           your team on autopilot — setting your optimal lineup, working the waiver
-          wire, and surfacing trades. It's off by default. Lineup setting is{' '}
-          <strong>live</strong>: the Auto tab can apply your optimal lineup
-          straight to ESPN (a real, reversible write behind an explicit confirm).
-          Waivers and trades still run in <strong>dry run</strong> — they show and
-          log what they'd do without changing anything — until each ESPN write is
-          verified. You choose which parts to turn on.
+          wire, and surfacing trades. It's off by default. Lineup and waiver
+          moves are <strong>live</strong>: the Auto tab applies your optimal
+          lineup to ESPN, and the Waivers tab submits a pickup (add + drop, or a
+          FAAB claim) — both real writes behind an explicit confirm. Trades stay
+          surfaced for your one-tap approval; Auto Mode never sends them on its
+          own. You choose which parts to turn on.
         </div>
       </Card>
 

@@ -32,7 +32,10 @@ from ..services import season as season_service
 #: behind the install switch, the per-user capability, and an explicit confirm).
 #: The remaining tiers stay False until each write's ESPN payload is captured.
 LINEUP_WRITE_ENABLED = True
-WAIVER_WRITE_ENABLED = False
+#: Waiver add/drop and FAAB claims write too, submitted per-target from the
+#: Waivers tab behind a preview + explicit confirm (partly irreversible, so it
+#: is not a one-tap flow). Trades stay surfaced-for-approval only.
+WAIVER_WRITE_ENABLED = True
 #: Auto Mode never fires trades at leaguemates on its own -- trades are always
 #: surfaced for the user's one-tap approval, never auto-executed.
 TRADE_AUTO_EXECUTE = False
@@ -156,8 +159,11 @@ def build_plan(
         plan.waivers = {
             "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
             "write_enabled": WAIVER_WRITE_ENABLED,
-            "status": "held_pending_capture",
-            "note": "Ranked pickups are on the Waivers tab; autonomous claims need the ESPN capture.",
+            "status": "ready_to_apply" if WAIVER_WRITE_ENABLED else "held_pending_capture",
+            "note": (
+                "Ranked pickups are on the Waivers tab -- each shows an Add/Claim "
+                "button that submits the add/drop to ESPN behind a confirm."
+            ),
         }
 
     if tiers.trades:

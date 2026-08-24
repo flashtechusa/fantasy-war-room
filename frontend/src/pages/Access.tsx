@@ -267,9 +267,9 @@ export default function Access() {
           <div className="small" style={{ minWidth: 0 }}>
             Master switch for autonomous team management (lineup, waivers, trade
             suggestions). When <strong>off</strong>, no account's Auto Mode runs —
-            including the live lineup write. Lineup setting writes to ESPN (behind
-            each user's permission and an explicit confirm); waivers and trades
-            still plan and log only.
+            including the live lineup and waiver writes. Lineup setting and waiver
+            add/drop write to ESPN (behind each user's permission and an explicit
+            confirm); trades stay surfaced for one-tap approval only.
           </div>
           <button
             className={`btn ${autoMode.data?.enabled ? 'primary' : ''}`}

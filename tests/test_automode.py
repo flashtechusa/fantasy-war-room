@@ -27,14 +27,15 @@ def _grant_auto_mode(client):
     assert r.status_code == 200 and r.json()["user"]["can_auto_mode"] is True
 
 
-# --- write flags: lineup live, the rest staged off -------------------------
+# --- write flags: lineup + waivers live, trades never auto-execute ---------
 
 
-def test_lineup_write_is_live_others_staged_off():
-    # Setting your own lineup is reversible and own-team-only, so it is the first
-    # live write. The remaining tiers stay off until each payload is captured.
+def test_lineup_and_waivers_write_trades_never_auto_execute():
+    # Lineup (reversible) and waiver add/drop (guarded by a preview + confirm)
+    # both write. Trades are never fired autonomously -- only surfaced for the
+    # user's one-tap approval.
     assert automode.LINEUP_WRITE_ENABLED is True
-    assert automode.WAIVER_WRITE_ENABLED is False
+    assert automode.WAIVER_WRITE_ENABLED is True
     assert automode.TRADE_AUTO_EXECUTE is False
 
 

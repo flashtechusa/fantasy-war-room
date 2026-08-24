@@ -1,7 +1,7 @@
 /** Phase 8 -- waiver wire. */
 
 import { useState } from 'react'
-import { api } from '../api'
+import { api, type WaiverApplyResult } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -13,11 +13,98 @@ const VERDICT_COLOR: Record<string, string> = {
   depth: 'var(--fair)',
 }
 
+/**
+ * Submit one waiver target to ESPN. Two-step (Add → Confirm) so nothing goes out
+ * on a single tap, and it shows exactly what it will do: add this player, drop
+ * the recommended one, and (on waivers) the FAAB bid. Only rendered when the
+ * viewer has the Auto Mode capability and the install switch is on.
+ */
+function ClaimToEspn({
+  addId,
+  addName,
+  dropName,
+  dropId,
+  bid,
+  usesFaab,
+}: {
+  addId: number
+  addName: string
+  dropName: string | null
+  dropId: number | null
+  bid: number
+  usesFaab: boolean
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<WaiverApplyResult | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function submit() {
+    setBusy(true)
+    setErr(null)
+    try {
+      const r = await api.applyWaiver({ add_id: addId, drop_id: dropId, bid })
+      setResult(r)
+      setConfirming(false)
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const dropNote = dropName ? `, drop ${dropName}` : ''
+  const bidNote = usesFaab && bid ? ` for $${bid}` : ''
+
+  return (
+    <div style={{ marginTop: 10 }}>
+      {!confirming ? (
+        <button
+          className="btn sm primary"
+          disabled={busy}
+          onClick={() => { setConfirming(true); setResult(null); setErr(null) }}
+        >
+          Add to ESPN
+        </button>
+      ) : (
+        <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+          <span className="tiny">
+            Add {addName}{dropNote}{bidNote} on ESPN now.
+          </span>
+          <button className="btn sm primary" disabled={busy} onClick={submit}>
+            {busy ? 'Submitting…' : 'Confirm'}
+          </button>
+          <button className="btn sm" disabled={busy} onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+        </div>
+      )}
+      {err && <div style={{ marginTop: 6 }}><Banner kind="error">{err}</Banner></div>}
+      {result && (
+        <div style={{ marginTop: 6 }}>
+          <Banner kind={result.ok ? 'info' : 'error'}>
+            {result.ok
+              ? `Submitted to ESPN (${result.kind === 'WAIVER' ? 'waiver claim' : 'free-agent add'}, HTTP ${result.status_code}).`
+              : `ESPN did not accept it (HTTP ${result.status_code}).`}
+            <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+              {result.response}
+            </div>
+          </Banner>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Waivers() {
   const [week, setWeek] = useState<number | undefined>(undefined)
   const [refreshing, setRefreshing] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const waivers = useAsync(() => api.waivers(week, 15), [week])
+  // Whether this viewer may submit an add/drop to ESPN (Auto Mode capability +
+  // the install-wide switch). The button is hidden unless both are on.
+  const auto = useAsync(() => api.autoModeStatus(), [])
+  const canClaim = Boolean(auto.data?.gates.install_enabled && auto.data?.gates.capable)
 
   async function refresh() {
     setRefreshing(true)
@@ -176,6 +263,17 @@ export default function Waivers() {
                 <li key={i}>{reason}</li>
               ))}
             </ul>
+
+            {canClaim && (
+              <ClaimToEspn
+                addId={target.player.espn_player_id}
+                addName={target.player.name}
+                dropId={target.drop?.espn_player_id ?? null}
+                dropName={target.drop?.name ?? null}
+                bid={target.faab_bid}
+                usesFaab={data.uses_faab}
+              />
+            )}
           </div>
         ))
       )}

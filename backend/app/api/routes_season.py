@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings
@@ -18,11 +19,11 @@ from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
 from datetime import timedelta
 
-from ..espn import lineup_write, trade_write
+from ..espn import lineup_write, trade_write, waiver_write
 from ..espn.client import EspnConnectionError, EspnNotConfigured
 from ..espn.constants import normalise_slot_label
 from ..espn.redaction import redact
-from ..models import AutoModeRun, League, TradeSendLog, utcnow
+from ..models import AutoModeRun, League, Player, TradeSendLog, WaiverClaimLog, utcnow
 from ..services import season as season_service
 from ..services.board import league_shape
 from ..services.importer import import_free_agents
@@ -949,6 +950,232 @@ def lineup_apply(
              "from_slot": m.from_slot, "to_slot": m.to_slot}
             for m in result.moves
         ],
+        "response": result.response,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Waivers -- add/drop and FAAB claims (guarded like the trade sender)
+# ---------------------------------------------------------------------------
+
+
+class WaiverPreviewRequest(BaseModel):
+    add_id: int = Field(..., description="ESPN player id to add / claim.")
+    drop_id: int | None = Field(None, description="ESPN player id to drop, if any.")
+    bid: int = Field(0, ge=0, le=1000, description="FAAB bid for a waiver claim.")
+
+
+class WaiverApplyRequest(WaiverPreviewRequest):
+    confirm: bool = Field(
+        False, description="Must be true -- this submits a real add/drop or claim to ESPN."
+    )
+    week: int | None = Field(default=None, ge=1, le=18)
+
+
+#: A successful, identical claim within this window is treated as a duplicate.
+_WAIVER_DUPLICATE_WINDOW = timedelta(hours=24)
+
+
+def _resolve_waiver(session, league, mine, add_id, drop_id):
+    """Resolve the add (and optional drop) into WaiverPlayers + the add's availability.
+
+    Fails closed on anything malformed so preview and apply reject identically.
+    """
+    ids = {add_id} | ({drop_id} if drop_id else set())
+    rows = {
+        p.espn_player_id: p
+        for p in session.scalars(
+            select(Player).where(
+                Player.season == league.season,
+                Player.source == league.source,
+                Player.espn_player_id.in_(ids),
+            )
+        ).all()
+    }
+    add_row = rows.get(add_id)
+    if add_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Player {add_id} is not in this league's pool. Refresh free agents.",
+        )
+    add = waiver_write.WaiverPlayer(add_id, add_row.name, add_row.position)
+
+    drop = None
+    if drop_id:
+        drop_row = rows.get(drop_id)
+        if drop_row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Drop player {drop_id} is not in this league's pool.",
+            )
+        drop = waiver_write.WaiverPlayer(drop_id, drop_row.name, drop_row.position)
+    return add, drop, (add_row.availability or "")
+
+
+def _revalidate_waiver(session, league, mine, add_id, drop_id):
+    """Immediately before submit: the add must still be available, the drop mine."""
+    mine_ids = season_service.team_roster_ids(league, mine.espn_team_id)
+    if add_id in mine_ids:
+        return "you already roster that player."
+    if drop_id and drop_id not in mine_ids:
+        return "the player you want to drop is no longer on your roster."
+    # The add must not belong to another team (already rostered elsewhere).
+    add_row = session.scalars(
+        select(Player).where(
+            Player.season == league.season,
+            Player.source == league.source,
+            Player.espn_player_id == add_id,
+        )
+    ).first()
+    if add_row is not None and (add_row.availability or "").upper() not in {"FREEAGENT", "WAIVERS"}:
+        return "that player is no longer a free agent."
+    return None
+
+
+def _waiver_audit(session, *, user, league, mine, add, drop, kind, bid, fp,
+                  outcome, ok, status_code, detail):
+    """Record one waiver attempt -- what was tried and how it went, no credentials."""
+    session.add(WaiverClaimLog(
+        user_id=getattr(user, "id", None),
+        username=getattr(user, "username", "") or "",
+        espn_league_id=league.espn_league_id,
+        season=league.season,
+        my_team_id=getattr(mine, "espn_team_id", None),
+        kind=kind,
+        add_id=add.espn_player_id if add else None,
+        drop_id=drop.espn_player_id if drop else None,
+        bid=int(bid or 0),
+        fingerprint=fp,
+        outcome=outcome,
+        ok=ok,
+        status_code=status_code,
+        detail=redact(detail)[:500],
+    ))
+    session.commit()
+
+
+@router.post("/waiver/preview")
+def waiver_preview(
+    payload: WaiverPreviewRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_auto_mode),
+) -> dict:
+    """Show the exact add/drop (or claim) that a submit would make. Sends nothing."""
+    mine = season_service.my_team(session, league)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your team is not identified yet, so a waiver move cannot be built.",
+        )
+    add, drop, availability = _resolve_waiver(
+        session, league, mine, payload.add_id, payload.drop_id
+    )
+    kind = waiver_write.transaction_type(availability)
+    return {
+        "write_enabled": waiver_write.WAIVER_WRITE_ENABLED,
+        "kind": kind,
+        "summary": waiver_write._summary(add, drop, kind, payload.bid),  # noqa: SLF001
+        "add": {"espn_player_id": add.espn_player_id, "name": add.name, "position": add.position},
+        "drop": (
+            {"espn_player_id": drop.espn_player_id, "name": drop.name, "position": drop.position}
+            if drop else None
+        ),
+        "bid": payload.bid if kind == "WAIVER" else 0,
+    }
+
+
+@router.post("/waiver/apply")
+def waiver_apply(
+    payload: WaiverApplyRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_auto_mode),
+) -> dict:
+    """Submit an add/drop or FAAB claim to ESPN. Partly irreversible.
+
+    Clears, in order: the install-wide Auto Mode kill switch, the per-user
+    capability (checked by the dependency), an explicit confirm, present ESPN
+    cookies, a fresh revalidation, and a duplicate check. Every attempt is audited
+    without credentials, and ESPN's raw (redacted) response is surfaced.
+    """
+    mine = season_service.my_team(session, league)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your team is not identified yet, so a waiver move cannot be submitted.",
+        )
+    add, drop, availability = _resolve_waiver(
+        session, league, mine, payload.add_id, payload.drop_id
+    )
+    kind = waiver_write.transaction_type(availability)
+    fp = waiver_write.fingerprint(
+        season=league.season, league_id=league.espn_league_id,
+        team_id=mine.espn_team_id, add_id=payload.add_id, drop_id=payload.drop_id,
+    )
+
+    def refuse(code: int, outcome: str, detail: str):
+        _waiver_audit(session, user=user, league=league, mine=mine, add=add, drop=drop,
+                      kind=kind, bid=payload.bid, fp=fp, outcome=outcome, ok=False,
+                      status_code=code, detail=detail)
+        raise HTTPException(status_code=code, detail=detail)
+
+    # 1. Install-wide Auto Mode kill switch, off by default.
+    if not getattr(settings, "auto_mode_enabled", False):
+        refuse(status.HTTP_403_FORBIDDEN, "disabled",
+               "Auto Mode is switched off for this installation.")
+    # 2. Explicit confirmation.
+    if not payload.confirm:
+        refuse(status.HTTP_400_BAD_REQUEST, "unconfirmed",
+               "Confirm first -- this submits a real add/drop to ESPN.")
+    # 3. Credentials present (never logged).
+    if not (settings.espn_swid and settings.espn_s2):
+        refuse(status.HTTP_409_CONFLICT, "no_credentials",
+               "Connect ESPN (SWID + espn_s2) before a waiver move.")
+    # 4. Revalidate against the latest known rosters.
+    problem = _revalidate_waiver(session, league, mine, payload.add_id, payload.drop_id)
+    if problem:
+        refuse(status.HTTP_409_CONFLICT, "roster_changed",
+               f"Rosters changed since you built this -- {problem} Rebuild it.")
+    # 5. Duplicate protection.
+    dupe = session.query(WaiverClaimLog).filter(
+        WaiverClaimLog.fingerprint == fp,
+        WaiverClaimLog.outcome == "submitted",
+        WaiverClaimLog.ok.is_(True),
+        WaiverClaimLog.created_at >= utcnow() - _WAIVER_DUPLICATE_WINDOW,
+    ).first()
+    if dupe is not None:
+        refuse(status.HTTP_409_CONFLICT, "duplicate",
+               "This exact add/drop was already submitted in the last 24 hours.")
+
+    result = waiver_write.send_waiver(
+        season=league.season,
+        league_id=league.espn_league_id,
+        team_id=mine.espn_team_id,
+        swid=settings.espn_swid,
+        espn_s2=settings.espn_s2,
+        scoring_period_id=_resolve_week(payload.week, settings),
+        add=add,
+        drop=drop,
+        availability=availability,
+        bid=payload.bid,
+    )
+    _waiver_audit(session, user=user, league=league, mine=mine, add=add, drop=drop,
+                  kind=kind, bid=payload.bid, fp=fp,
+                  outcome="submitted" if result.ok else "rejected", ok=result.ok,
+                  status_code=result.status_code, detail=result.response)
+    log.info(
+        "User %s submitted %s add=%s drop=%s: ok=%s status=%s",
+        getattr(user, "username", "?"), kind, payload.add_id, payload.drop_id,
+        result.ok, result.status_code,
+    )
+    return {
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "kind": result.kind,
+        "summary": result.summary,
         "response": result.response,
     }
 

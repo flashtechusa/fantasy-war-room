@@ -483,6 +483,42 @@ class TradeSendLog(Base):
     detail: Mapped[str] = mapped_column(String(500), default="")
 
 
+class WaiverClaimLog(Base):
+    """One attempt to add/drop or place a waiver claim on ESPN -- the audit trail.
+
+    Same shape and rules as the trade log: records *what was attempted and how it
+    went*, never *how it was authenticated* (no SWID, no espn_s2, no cookies). The
+    `fingerprint` identifies an identical claim so a duplicate can be refused.
+    """
+
+    __tablename__ = "waiver_claim_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    username: Mapped[str] = mapped_column(String(120), default="")
+    espn_league_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    my_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: FREEAGENT | WAIVER
+    kind: Mapped[str] = mapped_column(String(16), default="")
+    add_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    drop_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bid: Mapped[int] = mapped_column(Integer, default=0)
+    #: Stable hash of (season, league, team, add, drop) -- for dup checks.
+    fingerprint: Mapped[str] = mapped_column(String(64), default="", index=True)
+    #: submitted | duplicate | blocked | disabled | rejected | error
+    outcome: Mapped[str] = mapped_column(String(20), default="")
+    ok: Mapped[bool] = mapped_column(Boolean, default=False)
+    status_code: Mapped[int] = mapped_column(Integer, default=0)
+    #: Short, already-redacted note. Never contains credentials.
+    detail: Mapped[str] = mapped_column(String(500), default="")
+
+
 class AutoModeRun(Base):
     """One Auto Mode planning cycle or action -- the activity log.
 
