@@ -58,6 +58,7 @@ class UpdateUser(BaseModel):
     enabled: bool | None = None
     role: str | None = None
     can_send_trades: bool | None = None
+    can_auto_mode: bool | None = None
 
     model_config = {"extra": "forbid"}
 
@@ -70,6 +71,7 @@ def _describe(user: User) -> dict:
         "role": user.role,
         "enabled": user.enabled,
         "can_send_trades": bool(getattr(user, "can_send_trades", False)),
+        "can_auto_mode": bool(getattr(user, "can_auto_mode", False)),
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
     }
@@ -152,6 +154,12 @@ def update_user(
             "Trade-send capability for %s set to %s by %s",
             user.username, payload.can_send_trades, owner.username,
         )
+    if payload.can_auto_mode is not None:
+        user.can_auto_mode = payload.can_auto_mode
+        log.info(
+            "Auto Mode capability for %s set to %s by %s",
+            user.username, payload.can_auto_mode, owner.username,
+        )
     session.commit()
     return {"user": _describe(user)}
 
@@ -205,6 +213,40 @@ def set_trade_sending(
     write_overrides(session, {"trades_send_enabled": bool(payload.enabled)})
     log.info("Trade sending kill switch set to %s by %s", payload.enabled, owner.username)
     return {"enabled": bool(effective_settings(session).trades_send_enabled)}
+
+
+class AutoModeToggle(BaseModel):
+    enabled: bool
+
+    model_config = {"extra": "forbid"}
+
+
+@router.get("/auto-mode")
+def get_auto_mode(
+    session: Session = Depends(get_db), _: User = Depends(owner_only)
+) -> dict:
+    """The install-wide Auto Mode master switch state."""
+    from ..services.runtime_config import effective_settings
+
+    return {"enabled": bool(effective_settings(session).auto_mode_enabled)}
+
+
+@router.post("/auto-mode")
+def set_auto_mode(
+    payload: AutoModeToggle,
+    session: Session = Depends(get_db),
+    owner: User = Depends(owner_only),
+) -> dict:
+    """Turn the install-wide Auto Mode master switch on or off. Owner only.
+
+    Off is the default and stops every account's Auto Mode immediately, whatever
+    their per-account capability or opt-in says.
+    """
+    from ..services.runtime_config import effective_settings, write_overrides
+
+    write_overrides(session, {"auto_mode_enabled": bool(payload.enabled)})
+    log.info("Auto Mode master switch set to %s by %s", payload.enabled, owner.username)
+    return {"enabled": bool(effective_settings(session).auto_mode_enabled)}
 
 
 @router.patch("/beta-requests/{request_id}")

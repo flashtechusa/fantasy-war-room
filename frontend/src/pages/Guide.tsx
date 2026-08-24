@@ -119,7 +119,18 @@ export default function Guide() {
         </div>
       </Card>
 
-      <Card title="4. Draft tools (draft day)">
+      <Card title="4. Auto Mode 🤖 (optional)">
+        <div className="small muted">
+          If your admin enables it for you, the <strong>Auto</strong> tab can run
+          your team on autopilot — setting your optimal lineup, working the waiver
+          wire, and surfacing trades. It's off by default and, for now, runs in{' '}
+          <strong>dry run</strong>: it shows and logs exactly what it would do
+          without changing anything in ESPN. You choose which parts (lineup,
+          waivers, trades) to turn on.
+        </div>
+      </Card>
+
+      <Card title="5. Draft tools (draft day)">
         <div className="small muted">
           When it's draft season, the <strong>League</strong> tab links to the{' '}
           <strong>Draft Board</strong> (live best-available with your needs),{' '}

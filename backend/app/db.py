@@ -84,9 +84,15 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "use_sleeper_projections": "BOOLEAN",
         "projection_mode": "VARCHAR(20)",
         "fantasypros_api_key_encrypted": "VARCHAR(600)",
+        "auto_mode": "BOOLEAN",
+        "auto_lineup": "BOOLEAN",
+        "auto_waivers": "BOOLEAN",
+        "auto_trades": "BOOLEAN",
+        "auto_faab_max": "INTEGER",
     },
     "users": {
         "can_send_trades": "BOOLEAN",
+        "can_auto_mode": "BOOLEAN",
     },
 }
 

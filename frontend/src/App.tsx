@@ -15,6 +15,7 @@ import DraftDiagnostics from './pages/DraftDiagnostics'
 import Landing from './pages/Landing'
 import AdminConsole from './pages/AdminConsole'
 import Guide from './pages/Guide'
+import Auto from './pages/Auto'
 
 // In-season nav. The draft tools (board, live draft, simulator) stay routable
 // and are linked from League -- they matter one day a year, these matter every
@@ -25,6 +26,7 @@ const NAV = [
   { to: '/team', label: 'My Team', icon: '🛡️' },
   { to: '/teams', label: 'Teams', icon: '🏈' },
   { to: '/trade', label: 'Trade', icon: '🔄' },
+  { to: '/auto', label: 'Auto', icon: '🤖' },
   { to: '/settings', label: 'League', icon: '⚙️' },
   { to: '/help', label: 'Help', icon: '❓' },
 ]
@@ -129,6 +131,7 @@ export default function App() {
           <Route path="/teams" element={<PowerRankings />} />
           <Route path="/connect" element={<ConnectEspn onChange={health.reload} />} />
           <Route path="/help" element={<Guide />} />
+          <Route path="/auto" element={<Auto />} />
           {/* Debug screen. Routable only while FWR_DEBUG_SCREENS is on -- it is
               a testing tool, and one more thing to explain otherwise. */}
           {health.data?.debug_screens && (

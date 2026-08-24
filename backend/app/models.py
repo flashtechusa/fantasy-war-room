@@ -407,6 +407,10 @@ class User(Base):
     #: someone's league). Off by default and never self-serve -- only the owner
     #: grants it, per account, in the admin screen. NULL reads as False.
     can_send_trades: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    #: Owner-granted capability to use Auto Mode (autonomous team management). Off
+    #: by default, granted per account by the owner. NULL reads as False. Auto
+    #: Mode also requires the install-wide switch and the user's own opt-in.
+    can_auto_mode: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -479,6 +483,32 @@ class TradeSendLog(Base):
     detail: Mapped[str] = mapped_column(String(500), default="")
 
 
+class AutoModeRun(Base):
+    """One Auto Mode planning cycle or action -- the activity log.
+
+    Records what Auto Mode decided and whether it executed, planned, or was held.
+    Like the trade log it carries no credentials -- only the decision and outcome
+    so the user can see exactly what their team's autopilot did (or would do).
+    """
+
+    __tablename__ = "auto_mode_run"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    username: Mapped[str] = mapped_column(String(120), default="")
+    #: lineup | waivers | trades | cycle
+    tier: Mapped[str] = mapped_column(String(20), default="")
+    #: planned | would_execute | held_pending_capture | executed | error | skipped
+    status: Mapped[str] = mapped_column(String(24), default="")
+    #: Human-readable summary of the decision, already redacted.
+    summary: Mapped[str] = mapped_column(String(600), default="")
+
+
 class UserEspnConfig(Base):
     """One user's ESPN connection.
 
@@ -521,6 +551,16 @@ class UserEspnConfig(Base):
     #: key. FantasyPros keys are issued per person under their own agreement, so
     #: each user brings their own; it is never shared or returned by the API.
     fantasypros_api_key_encrypted: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    #: Auto Mode -- the user's own opt-in and which tiers they've turned on. All
+    #: default off; effective only when the install switch is on AND the owner
+    #: has granted `can_auto_mode`. Even fully on, Auto Mode currently runs in
+    #: dry-run (it plans and logs; the ESPN writes are staged pending capture).
+    auto_mode: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    auto_lineup: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    auto_waivers: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    auto_trades: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    #: Cap on FAAB Auto Mode may spend on a single waiver claim (0 = no spend).
+    auto_faab_max: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

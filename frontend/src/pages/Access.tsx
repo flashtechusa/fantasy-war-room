@@ -47,6 +47,7 @@ export default function Access() {
   const requests = useAsync(() => api.betaRequests(), [])
   const users = useAsync(() => api.users(), [])
   const tradeSending = useAsync(() => api.tradeSendingStatus(), [])
+  const autoMode = useAsync(() => api.autoModeSwitchStatus(), [])
 
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
@@ -108,6 +109,24 @@ export default function Access() {
     try {
       await api.setTradeSending(!tradeSending.data?.enabled)
       tradeSending.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  async function toggleGlobalAutoMode() {
+    try {
+      await api.setAutoModeSwitch(!autoMode.data?.enabled)
+      autoMode.reload()
+    } catch (err) {
+      setError((err as Error).message)
+    }
+  }
+
+  async function toggleAuto(user: AccountRow) {
+    try {
+      await api.updateUser(user.id, { can_auto_mode: !user.can_auto_mode })
+      users.reload()
     } catch (err) {
       setError((err as Error).message)
     }
@@ -243,6 +262,28 @@ export default function Access() {
         </div>
       </Card>
 
+      <Card title="Auto Mode (global kill switch)">
+        <div className="row between" style={{ alignItems: 'center', gap: 10 }}>
+          <div className="small" style={{ minWidth: 0 }}>
+            Master switch for autonomous team management (lineup, waivers, trade
+            suggestions). When <strong>off</strong>, no account's Auto Mode runs.
+            Currently dry-run everywhere — it plans and logs, but writes nothing to
+            ESPN yet.
+          </div>
+          <button
+            className={`btn ${autoMode.data?.enabled ? 'primary' : ''}`}
+            onClick={toggleGlobalAutoMode}
+            style={{ whiteSpace: 'nowrap' }}
+          >
+            {autoMode.data?.enabled ? 'Auto Mode: ON' : 'Auto Mode: OFF'}
+          </button>
+        </div>
+        <div className="tiny faint" style={{ marginTop: 8 }}>
+          Off by default. Also required: the per-account “Auto” permission below,
+          and each user's own opt-in on their Auto tab.
+        </div>
+      </Card>
+
       <Card title={`Accounts (${users.data?.users.length ?? 0})`}>
         <div className="table-wrap">
           <table>
@@ -251,6 +292,7 @@ export default function Access() {
                 <th>User</th>
                 <th>Role</th>
                 <th>Send trades</th>
+                <th>Auto</th>
                 <th>Last in</th>
                 <th />
               </tr>
@@ -277,6 +319,15 @@ export default function Access() {
                       title="Allow this account to send trade proposals to ESPN"
                     >
                       {user.can_send_trades ? 'On' : 'Off'}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      className={`btn sm ${user.can_auto_mode ? 'primary' : ''}`}
+                      onClick={() => toggleAuto(user)}
+                      title="Allow this account to use Auto Mode"
+                    >
+                      {user.can_auto_mode ? 'On' : 'Off'}
                     </button>
                   </td>
                   <td className="tiny faint">

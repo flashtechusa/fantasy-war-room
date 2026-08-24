@@ -28,6 +28,7 @@ OVERRIDABLE = {
     "faab_remaining": int,
     "fantasypros_api_key": str,
     "trades_send_enabled": bool,
+    "auto_mode_enabled": bool,
 }
 
 #: Never returned by the API.

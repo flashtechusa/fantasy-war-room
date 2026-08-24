@@ -534,8 +534,34 @@ export interface AccountRow {
   role: string
   enabled: boolean
   can_send_trades: boolean
+  can_auto_mode: boolean
   created_at: string
   last_login_at: string | null
+}
+
+export interface AutoModeStatus {
+  gates: { install_enabled: boolean; capable: boolean; user_enabled: boolean }
+  tiers: { lineup: boolean; waivers: boolean; trades: boolean }
+  faab_max: number
+  plan: {
+    active: boolean
+    dry_run: boolean
+    reason: string | null
+    lineup: {
+      optimal_points?: number
+      current_points?: number
+      gain?: number
+      start?: { espn_player_id: number; name: string; position: string; projected_points: number }[]
+      sit?: { espn_player_id: number; name: string; position: string; projected_points: number }[]
+      already_optimal?: boolean
+      status?: string
+      write_enabled?: boolean
+      note?: string
+    } | null
+    waivers: { faab_max: number; status: string; note: string; write_enabled: boolean } | null
+    trades: { headline: string | null; status: string; note: string } | null
+  }
+  activity: { at: string; tier: string; status: string; summary: string }[]
 }
 
 export interface DropCandidate {
@@ -1104,7 +1130,12 @@ export const api = {
 
   updateUser: (
     id: number,
-    body: { enabled?: boolean; role?: string; can_send_trades?: boolean },
+    body: {
+      enabled?: boolean
+      role?: string
+      can_send_trades?: boolean
+      can_auto_mode?: boolean
+    },
   ) =>
     request<{ user: AccountRow }>(`/api/admin/users/${id}`, {
       method: 'PATCH',
@@ -1123,6 +1154,28 @@ export const api = {
     request<{ enabled: boolean }>('/api/admin/trade-sending', {
       method: 'POST',
       body: JSON.stringify({ enabled }),
+    }),
+
+  // Install-wide Auto Mode master switch (owner only).
+  autoModeSwitchStatus: () => request<{ enabled: boolean }>('/api/admin/auto-mode'),
+  setAutoModeSwitch: (enabled: boolean) =>
+    request<{ enabled: boolean }>('/api/admin/auto-mode', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  // Per-user Auto Mode status/plan and settings.
+  autoModeStatus: () => request<AutoModeStatus>('/api/season/automode'),
+  setAutoModeSettings: (body: {
+    auto_mode?: boolean
+    auto_lineup?: boolean
+    auto_waivers?: boolean
+    auto_trades?: boolean
+    auto_faab_max?: number
+  }) =>
+    request<{ ok: boolean }>('/api/season/automode/settings', {
+      method: 'POST',
+      body: JSON.stringify(body),
     }),
 
   login: (username: string, password: string) =>

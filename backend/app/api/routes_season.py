@@ -800,3 +800,134 @@ def roster(
             for t in league.teams
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Auto Mode -- autonomous team management, staged and dry-run first
+# ---------------------------------------------------------------------------
+
+
+class AutoModeSettings(BaseModel):
+    auto_mode: bool | None = None
+    auto_lineup: bool | None = None
+    auto_waivers: bool | None = None
+    auto_trades: bool | None = None
+    auto_faab_max: int | None = Field(None, ge=0, le=1000)
+
+
+def _auto_gates(session, settings, user):
+    """(install_on, capable, config) -- the three things Auto Mode needs."""
+    from ..services import runtime_config
+
+    return (
+        bool(getattr(settings, "auto_mode_enabled", False)),
+        bool(getattr(user, "can_auto_mode", False)),
+        runtime_config.user_config(session, user),
+    )
+
+
+def _auto_plan_payload(plan) -> dict:
+    return {
+        "active": plan.active, "dry_run": plan.dry_run, "reason": plan.reason,
+        "lineup": plan.lineup, "waivers": plan.waivers, "trades": plan.trades,
+    }
+
+
+@router.get("/automode")
+def automode_status(
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_user),
+) -> dict:
+    """This user's Auto Mode gates, its dry-run plan, and recent activity.
+
+    Computes what Auto Mode *would* do (optimal lineup, a trade suggestion) and
+    logs the cycle. Writes nothing to ESPN -- Auto Mode is dry-run until each
+    write's payload is captured.
+    """
+    from ..models import AutoModeRun
+    from ..services import automode
+
+    install_on, capable, config = _auto_gates(session, settings, user)
+
+    trade_headline = None
+    if config is not None and getattr(config, "auto_trades", False):
+        try:
+            week = _resolve_week(None, settings)
+            result = season_service.propose_trades(
+                session, league, engine, week, horizon="season", include_longshots=False
+            )
+            if result.get("mutual"):
+                trade_headline = getattr(result["mutual"][0], "headline", None)
+        except Exception:      # noqa: BLE001 - a plan is best-effort, never a 500
+            trade_headline = None
+
+    plan = automode.build_plan(
+        session, league, engine, user, config,
+        install_on=install_on, week=_resolve_week(None, settings),
+        trade_headline=trade_headline,
+    )
+    if plan.active:
+        automode.log_cycle(session, user, plan)
+
+    recent = session.query(AutoModeRun).filter(
+        AutoModeRun.user_id == getattr(user, "id", None)
+    ).order_by(AutoModeRun.id.desc()).limit(20).all()
+
+    return {
+        "gates": {
+            "install_enabled": install_on,
+            "capable": capable,
+            "user_enabled": bool(getattr(config, "auto_mode", False)) if config else False,
+        },
+        "tiers": {
+            "lineup": bool(getattr(config, "auto_lineup", False)) if config else False,
+            "waivers": bool(getattr(config, "auto_waivers", False)) if config else False,
+            "trades": bool(getattr(config, "auto_trades", False)) if config else False,
+        },
+        "faab_max": int(getattr(config, "auto_faab_max", 0) or 0) if config else 0,
+        "plan": _auto_plan_payload(plan),
+        "activity": [
+            {"at": r.created_at, "tier": r.tier, "status": r.status, "summary": r.summary}
+            for r in recent
+        ],
+    }
+
+
+@router.post("/automode/settings")
+def automode_settings(
+    payload: AutoModeSettings,
+    session: Session = Depends(get_db),
+    user=Depends(require_user),
+) -> dict:
+    """Set this user's Auto Mode opt-in and tiers. Requires the granted capability.
+
+    Turning tiers on only takes effect when the owner has granted Auto Mode and
+    the install switch is on -- but a user can pre-set their preferences either
+    way. Never writes to ESPN.
+    """
+    if payload.auto_mode and not bool(getattr(user, "can_auto_mode", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Auto Mode is not enabled for your account. Ask the league admin.",
+        )
+    from ..services import runtime_config
+
+    config = runtime_config._get_or_create_config(session, user)  # noqa: SLF001
+    for field_name in ("auto_mode", "auto_lineup", "auto_waivers", "auto_trades", "auto_faab_max"):
+        value = getattr(payload, field_name)
+        if value is not None:
+            setattr(config, field_name, value)
+    session.commit()
+    return {
+        "ok": True,
+        "auto_mode": bool(getattr(config, "auto_mode", False)),
+        "tiers": {
+            "lineup": bool(getattr(config, "auto_lineup", False)),
+            "waivers": bool(getattr(config, "auto_waivers", False)),
+            "trades": bool(getattr(config, "auto_trades", False)),
+        },
+        "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
+    }

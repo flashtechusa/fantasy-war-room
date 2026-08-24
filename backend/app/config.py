@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     #: confirmation -- all three must line up for a proposal to leave the app.
     trades_send_enabled: bool = False
 
+    #: Install-wide master switch for Auto Mode (autonomous team management). OFF
+    #: by default; no account's autopilot runs until the owner turns it on, and
+    #: turning it off stops every account's Auto Mode immediately. In addition to
+    #: the per-user `can_auto_mode` capability and the user's own opt-in.
+    auto_mode_enabled: bool = False
+
     # --- Draft ------------------------------------------------------------
     my_team_id: int | None = None
     my_team_name: str | None = None
