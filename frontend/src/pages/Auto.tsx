@@ -9,7 +9,7 @@
  */
 
 import { useState } from 'react'
-import { api, type AutoModeStatus } from '../api'
+import { api, type AutoModeStatus, type LineupApplyResult } from '../api'
 import { Banner, Card, Loading } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -40,8 +40,28 @@ export default function Auto() {
   const status = useAsync<AutoModeStatus>(() => api.autoModeStatus(), [])
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [confirmingLineup, setConfirmingLineup] = useState(false)
+  const [applyingLineup, setApplyingLineup] = useState(false)
+  const [lineupResult, setLineupResult] = useState<LineupApplyResult | null>(null)
+  const [lineupErr, setLineupErr] = useState<string | null>(null)
 
   const s = status.data
+
+  async function applyLineup() {
+    setApplyingLineup(true)
+    setLineupErr(null)
+    setLineupResult(null)
+    try {
+      const result = await api.applyLineup(true)
+      setLineupResult(result)
+      setConfirmingLineup(false)
+      status.reload()
+    } catch (e) {
+      setLineupErr((e as Error).message)
+    } finally {
+      setApplyingLineup(false)
+    }
+  }
 
   async function save(patch: Record<string, boolean | number>) {
     setBusy(true)
@@ -106,9 +126,10 @@ export default function Auto() {
         {err && <div style={{ marginTop: 8 }}><Banner kind="error">{err}</Banner></div>}
 
         <div className="tiny faint" style={{ marginTop: 10 }}>
-          Dry run: Auto Mode currently <strong>plans and logs only</strong> — it does
-          not change anything in ESPN yet. Live execution turns on per tier once
-          each ESPN write is verified.
+          <strong>Lineup writing is live</strong>: you can apply your optimal
+          lineup straight to ESPN below (a real, reversible write behind an
+          explicit confirm). Waivers and trades still plan and log only — those
+          turn on per tier once each ESPN write is verified.
         </div>
       </Card>
 
@@ -123,7 +144,7 @@ export default function Auto() {
               ) : (
                 <>
                   <div className="small muted">
-                    Would set your optimal lineup ({s.plan.lineup.gain! > 0 ? '+' : ''}
+                    Set your optimal lineup ({s.plan.lineup.gain! > 0 ? '+' : ''}
                     {s.plan.lineup.gain} projected pts).
                   </div>
                   {(s.plan.lineup.start ?? []).length > 0 && (
@@ -138,7 +159,52 @@ export default function Auto() {
                   )}
                 </>
               )}
-              <div className="tiny faint" style={{ marginTop: 2 }}>Held — pending ESPN capture.</div>
+
+              {/* The real ESPN write. Two-step so nothing goes out on one tap. */}
+              {!s.plan.lineup.already_optimal && (
+                <div style={{ marginTop: 8 }}>
+                  {!confirmingLineup ? (
+                    <button
+                      className="btn sm primary"
+                      disabled={applyingLineup}
+                      onClick={() => { setConfirmingLineup(true); setLineupResult(null); setLineupErr(null) }}
+                    >
+                      Apply optimal lineup to ESPN
+                    </button>
+                  ) : (
+                    <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span className="tiny">This writes your lineup to ESPN now.</span>
+                      <button className="btn sm primary" disabled={applyingLineup} onClick={applyLineup}>
+                        {applyingLineup ? 'Applying…' : 'Confirm write'}
+                      </button>
+                      <button className="btn sm" disabled={applyingLineup} onClick={() => setConfirmingLineup(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {lineupErr && (
+                <div style={{ marginTop: 8 }}><Banner kind="error">{lineupErr}</Banner></div>
+              )}
+              {lineupResult && (
+                <div style={{ marginTop: 8 }}>
+                  <Banner kind={lineupResult.ok ? 'info' : 'error'}>
+                    {lineupResult.ok
+                      ? `Lineup applied to ESPN (HTTP ${lineupResult.status_code}). ${lineupResult.moves.length} move(s).`
+                      : `ESPN did not accept it (HTTP ${lineupResult.status_code}).`}
+                    {lineupResult.moves.length > 0 && (
+                      <div className="tiny" style={{ marginTop: 4 }}>
+                        {lineupResult.moves.map((m) => `${m.name}: ${m.from_slot}→${m.to_slot}`).join(', ')}
+                      </div>
+                    )}
+                    <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                      {lineupResult.response}
+                    </div>
+                  </Banner>
+                </div>
+              )}
             </div>
           )}
 

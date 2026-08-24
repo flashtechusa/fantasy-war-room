@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db import get_db
+from ..engine.roster import build_optimal_lineup
 from ..engine.roster_move import active_roster_limit, analyse_roster_move
 from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
@@ -17,10 +18,11 @@ from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
 from datetime import timedelta
 
-from ..espn import trade_write
+from ..espn import lineup_write, trade_write
 from ..espn.client import EspnConnectionError, EspnNotConfigured
+from ..espn.constants import normalise_slot_label
 from ..espn.redaction import redact
-from ..models import League, TradeSendLog, utcnow
+from ..models import AutoModeRun, League, TradeSendLog, utcnow
 from ..services import season as season_service
 from ..services.board import league_shape
 from ..services.importer import import_free_agents
@@ -813,6 +815,142 @@ class AutoModeSettings(BaseModel):
     auto_waivers: bool | None = None
     auto_trades: bool | None = None
     auto_faab_max: int | None = Field(None, ge=0, le=1000)
+
+
+class LineupApplyRequest(BaseModel):
+    confirm: bool = Field(
+        False, description="Must be true -- this writes your starting lineup to ESPN."
+    )
+    week: int | None = Field(default=None, ge=1, le=18)
+
+
+def require_auto_mode(user=Depends(require_user)):
+    """Only accounts the owner has granted the Auto Mode capability get here."""
+    if not getattr(user, "can_auto_mode", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Auto Mode is not enabled for your account.",
+        )
+    return user
+
+
+def _auto_run(session, *, user, tier, statusname, summary):
+    """Record one Auto Mode write attempt -- credential-free, like the trade audit."""
+    session.add(AutoModeRun(
+        user_id=getattr(user, "id", None),
+        username=getattr(user, "username", "") or "",
+        tier=tier, status=statusname, summary=redact(summary)[:600],
+    ))
+    session.commit()
+
+
+def _current_slots_by_id(team) -> dict[int, str]:
+    """Where ESPN currently has each of my players, keyed by player id."""
+    out: dict[int, str] = {}
+    for entry in (getattr(team, "roster", None) or []):
+        pid = entry.get("espn_player_id")
+        if pid:
+            out[int(pid)] = normalise_slot_label(entry.get("slot")) or "BE"
+    return out
+
+
+@router.post("/lineup/apply")
+def lineup_apply(
+    payload: LineupApplyRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_auto_mode),
+) -> dict:
+    """Auto Mode's first real ESPN write: set my optimal starting lineup.
+
+    Setting your own lineup is the safest write -- it only touches your team and
+    is fully reversible. It must clear, in order: the install-wide Auto Mode kill
+    switch, the per-user capability (checked by the dependency), an explicit
+    confirm, and present ESPN cookies. The computed moves and ESPN's raw
+    (redacted) response are returned so a rejected envelope is visible and
+    correctable, exactly as we did with the trade sender. Every attempt --
+    allowed or refused -- is written to the Auto Mode activity log, credential-free.
+    """
+    def refuse(code: int, statusname: str, detail: str):
+        _auto_run(session, user=user, tier="lineup", statusname=statusname, summary=detail)
+        raise HTTPException(status_code=code, detail=detail)
+
+    # 1. Install-wide Auto Mode kill switch, off by default.
+    if not getattr(settings, "auto_mode_enabled", False):
+        refuse(status.HTTP_403_FORBIDDEN, "disabled",
+               "Auto Mode is switched off for this installation.")
+    # 2. Explicit confirmation.
+    if not payload.confirm:
+        refuse(status.HTTP_400_BAD_REQUEST, "unconfirmed",
+               "Confirm first -- this writes your starting lineup to ESPN.")
+    # 3. Credentials present (never logged).
+    if not (settings.espn_swid and settings.espn_s2):
+        refuse(status.HTTP_409_CONFLICT, "no_credentials",
+               "Connect ESPN (SWID + espn_s2) before setting a lineup.")
+
+    mine = season_service.my_team(session, league)
+    if mine is None:
+        refuse(status.HTTP_409_CONFLICT, "no_team",
+               "Your team is not identified yet, so a lineup cannot be set.")
+    my_ids = season_service.my_roster_ids(session, league)
+    if not my_ids:
+        refuse(status.HTTP_409_CONFLICT, "no_roster",
+               "No roster found for your team. Import your league first.")
+
+    roster = engine.roster_players(my_ids)
+    optimal = build_optimal_lineup(roster, engine.shape)
+    names = {p.espn_player_id: p.name for p in roster}
+    # Every rostered player's target slot: a starting-slot label, or bench.
+    optimal_slot_by_id = {
+        s.player.espn_player_id: s.slot for s in optimal.starters if s.player
+    }
+    for p in optimal.bench:
+        optimal_slot_by_id.setdefault(p.espn_player_id, "BE")
+
+    current_slot_by_id = _current_slots_by_id(mine)
+    moves = lineup_write.build_moves(
+        optimal_slot_by_id=optimal_slot_by_id,
+        current_slot_by_id=current_slot_by_id,
+        names=names,
+    )
+
+    scoring_period_id = _resolve_week(payload.week, settings)
+    result = lineup_write.set_lineup(
+        season=league.season,
+        league_id=league.espn_league_id,
+        team_id=mine.espn_team_id,
+        swid=settings.espn_swid,
+        espn_s2=settings.espn_s2,
+        scoring_period_id=scoring_period_id,
+        moves=moves,
+    )
+
+    move_summary = (
+        "already optimal -- no change" if not moves
+        else "; ".join(f"{m.name} {m.from_slot}->{m.to_slot}" for m in moves)
+    )
+    _auto_run(
+        session, user=user, tier="lineup",
+        statusname="applied" if result.ok else "rejected",
+        summary=f"HTTP {result.status_code}: {move_summary}",
+    )
+    log.info(
+        "User %s applied lineup to team %s: ok=%s status=%s moves=%s",
+        getattr(user, "username", "?"), mine.espn_team_id, result.ok,
+        result.status_code, len(moves),
+    )
+    return {
+        "ok": result.ok,
+        "status_code": result.status_code,
+        "moves": [
+            {"espn_player_id": m.espn_player_id, "name": m.name,
+             "from_slot": m.from_slot, "to_slot": m.to_slot}
+            for m in result.moves
+        ],
+        "response": result.response,
+    }
 
 
 def _auto_gates(session, settings, user):

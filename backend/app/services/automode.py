@@ -26,9 +26,12 @@ from ..engine.roster import build_optimal_lineup
 from ..models import AutoModeRun, League, UserEspnConfig
 from ..services import season as season_service
 
-#: Per-tier write master switches. Each stays False until that write's ESPN
-#: payload is captured and verified; while False the tier plans but never writes.
-LINEUP_WRITE_ENABLED = False
+#: Per-tier write master switches. Setting your own lineup is reversible and
+#: only touches your team, so it is the first write that is live: the user
+#: applies the optimal lineup to ESPN on demand from the Auto tab (a real write,
+#: behind the install switch, the per-user capability, and an explicit confirm).
+#: The remaining tiers stay False until each write's ESPN payload is captured.
+LINEUP_WRITE_ENABLED = True
 WAIVER_WRITE_ENABLED = False
 #: Auto Mode never fires trades at leaguemates on its own -- trades are always
 #: surfaced for the user's one-tap approval, never auto-executed.
@@ -145,7 +148,9 @@ def build_plan(
     if tiers.lineup and mine is not None and my_ids:
         plan.lineup = build_lineup_plan(engine, my_ids, _current_starter_ids(mine))
         plan.lineup["write_enabled"] = LINEUP_WRITE_ENABLED
-        plan.lineup["status"] = "would_execute" if LINEUP_WRITE_ENABLED else "held_pending_capture"
+        # Lineup writing is live and user-triggered: the plan shows the moves and
+        # the Apply button on the Auto tab performs the real ESPN write.
+        plan.lineup["status"] = "ready_to_apply" if LINEUP_WRITE_ENABLED else "held_pending_capture"
 
     if tiers.waivers:
         plan.waivers = {

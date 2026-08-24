@@ -564,6 +564,13 @@ export interface AutoModeStatus {
   activity: { at: string; tier: string; status: string; summary: string }[]
 }
 
+export interface LineupApplyResult {
+  ok: boolean
+  status_code: number
+  moves: { espn_player_id: number; name: string; from_slot: string; to_slot: string }[]
+  response: string
+}
+
 export interface DropCandidate {
   espn_player_id: number
   name: string
@@ -1176,6 +1183,13 @@ export const api = {
     request<{ ok: boolean }>('/api/season/automode/settings', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+
+  // Auto Mode's first real ESPN write: set my optimal starting lineup.
+  applyLineup: (confirm: boolean) =>
+    request<LineupApplyResult>('/api/season/lineup/apply', {
+      method: 'POST',
+      body: JSON.stringify({ confirm }),
     }),
 
   login: (username: string, password: string) =>
