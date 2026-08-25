@@ -1,0 +1,70 @@
+name: Nova CAD Convert
+
+on:
+  push:
+    branches:
+      - cad/nova-lens-20mm
+    paths:
+      - '.github/workflows/nova-cad-convert.yml'
+      - 'cad_temp/nova_lens/**'
+  pull_request:
+    branches:
+      - claude/fantasy-war-room-app-n6edzt
+    paths:
+      - '.github/workflows/nova-cad-convert.yml'
+      - 'cad_temp/nova_lens/**'
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout temp branch
+        uses: actions/checkout@v4
+
+      - name: Rebuild original DWG and verify
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p cad_temp/nova_lens/input cad_temp/nova_lens/output
+          for f in cad_temp/nova_lens/m00_{0..4}.b64 cad_temp/nova_lens/m01_{0..4}.b64 cad_temp/nova_lens/m05_{0..4}.b64; do
+            test "$(wc -c < "$f")" -eq 500
+          done
+          cat \
+            cad_temp/nova_lens/m00_0.b64 cad_temp/nova_lens/m00_1.b64 cad_temp/nova_lens/m00_2.b64 cad_temp/nova_lens/m00_3.b64 cad_temp/nova_lens/m00_4.b64 \
+            cad_temp/nova_lens/m01_0.b64 cad_temp/nova_lens/m01_1.b64 cad_temp/nova_lens/m01_2.b64 cad_temp/nova_lens/m01_3.b64 cad_temp/nova_lens/m01_4.b64 \
+            cad_temp/nova_lens/part_02.b64 cad_temp/nova_lens/part_03.b64 cad_temp/nova_lens/part_04.b64 \
+            cad_temp/nova_lens/m05_0.b64 cad_temp/nova_lens/m05_1.b64 cad_temp/nova_lens/m05_2.b64 cad_temp/nova_lens/m05_3.b64 cad_temp/nova_lens/m05_4.b64 \
+            cad_temp/nova_lens/part_06.b64 cad_temp/nova_lens/part_07.b64 cad_temp/nova_lens/part_08.b64 cad_temp/nova_lens/part_09.b64 \
+            | tr -d '\r\n' | base64 -d > cad_temp/nova_lens/input/nova_original.dwg
+          test "$(wc -c < cad_temp/nova_lens/input/nova_original.dwg)" -eq 18730
+          test "$(head -c 6 cad_temp/nova_lens/input/nova_original.dwg)" = 'AC1032'
+          echo '723b02ed9fc0f0a06019ebbf2dd7018baab545b9bdb179c50c8f20a886d6fcab  cad_temp/nova_lens/input/nova_original.dwg' | sha256sum -c -
+
+      - name: Install ODA File Converter
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y wget xvfb libxcb-util1 libxcb-cursor0 libxcb-shape0 libgl1 libfontconfig1 libxrender1 libxext6 libxkbcommon-x11-0
+          wget -O /tmp/oda.deb 'https://www.opendesign.com/guestfiles/get?filename=ODAFileConverter_QT6_lnxX64_8.3dll_27.1.deb'
+          sudo apt-get install -y /tmp/oda.deb || (sudo apt-get install -f -y && sudo dpkg -i /tmp/oda.deb)
+          command -v ODAFileConverter || true
+          find / -type f -name 'ODAFileConverter' -perm -111 2>/dev/null | head -20
+
+      - name: Convert DWG to DXF
+        shell: bash
+        run: |
+          set -euxo pipefail
+          EXE="$(command -v ODAFileConverter || find /opt /usr -type f -name ODAFileConverter -perm -111 2>/dev/null | head -1)"
+          test -n "$EXE"
+          xvfb-run -a "$EXE" "$GITHUB_WORKSPACE/cad_temp/nova_lens/input" "$GITHUB_WORKSPACE/cad_temp/nova_lens/output" ACAD2018 DXF 0 0 '*.dwg'
+          find cad_temp/nova_lens/output -maxdepth 2 -type f -ls
+          test -n "$(find cad_temp/nova_lens/output -type f -iname '*.dxf' -print -quit)"
+
+      - name: Upload converted DXF
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-original-dxf
+          path: cad_temp/nova_lens/output/*.dxf
+          if-no-files-found: error
