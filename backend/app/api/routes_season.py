@@ -855,6 +855,34 @@ def _current_slots_by_id(team) -> dict[int, str]:
     return out
 
 
+def _refresh_rosters(session, settings) -> bool:
+    """Re-pull team rosters (with lineup slots) from ESPN before a write.
+
+    A write we made -- or one the user made on ESPN directly -- leaves our stored
+    roster slots stale, so a lineup diff computed against them proposes moves ESPN
+    has already applied and is refused as redundant (TRAN_ROSTER_SAME_SLOT), and a
+    waiver diff can target a player already gone. Refreshing the teams (not the
+    whole player pool, so it is cheap) means every write is computed against ESPN's
+    real current roster. Fails soft: a refresh error falls back to the stored
+    roster and lets the write proceed rather than blocking on a transient read.
+    """
+    from ..services import board as board_service
+    from ..services import importer
+
+    try:
+        importer.import_league(
+            session, build_provider(settings), settings,
+            include_players=False, include_history=False,
+        )
+        board_service.clear_cache()
+        return True
+    except Exception:      # noqa: BLE001 - a stale-but-present roster still writes
+        # Undo any partial import so the rest of the handler sees a clean session.
+        session.rollback()
+        log.warning("Roster refresh before an ESPN write failed; using stored roster.")
+        return False
+
+
 @router.post("/lineup/apply")
 def lineup_apply(
     payload: LineupApplyRequest,
@@ -890,6 +918,11 @@ def lineup_apply(
     if not (settings.espn_swid and settings.espn_s2):
         refuse(status.HTTP_409_CONFLICT, "no_credentials",
                "Connect ESPN (SWID + espn_s2) before setting a lineup.")
+
+    # Refresh from ESPN so we diff against the real current lineup, not a stale
+    # copy -- otherwise a move ESPN already made is re-sent and refused as
+    # redundant (TRAN_ROSTER_SAME_SLOT).
+    _refresh_rosters(session, settings)
 
     mine = season_service.my_team(session, league)
     if mine is None:
@@ -1134,6 +1167,8 @@ def waiver_apply(
     if not (settings.espn_swid and settings.espn_s2):
         refuse(status.HTTP_409_CONFLICT, "no_credentials",
                "Connect ESPN (SWID + espn_s2) before a waiver move.")
+    # Refresh from ESPN so revalidation sees the real rosters, not a stale copy.
+    _refresh_rosters(session, settings)
     # 4. Revalidate against the latest known rosters.
     problem = _revalidate_waiver(session, league, mine, payload.add_id, payload.drop_id)
     if problem:

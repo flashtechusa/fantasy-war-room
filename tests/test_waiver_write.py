@@ -169,6 +169,9 @@ def _patch_send_waiver(monkeypatch, *, ok=True, status_code=200,
 
     from app.api import routes_season
     monkeypatch.setattr(routes_season.waiver_write, "send_waiver", fake)
+    # The write path refreshes rosters live from ESPN first; in tests that would
+    # overwrite the fixture's hand-set roster, so no-op it here.
+    monkeypatch.setattr(routes_season, "_refresh_rosters", lambda *a, **k: True)
     return captured
 
 

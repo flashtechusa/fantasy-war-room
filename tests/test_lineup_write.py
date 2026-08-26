@@ -168,6 +168,10 @@ def _patch_set_lineup(monkeypatch, *, ok=True, status_code=200, response='{"id":
 
     from app.api import routes_season
     monkeypatch.setattr(routes_season.lineup_write, "set_lineup", fake)
+    # The write path refreshes rosters live from ESPN first; in tests that would
+    # overwrite the fixture's hand-set roster, so no-op it here. Its own behavior
+    # (that it is called before diffing) is covered by test_apply_refreshes_first.
+    monkeypatch.setattr(routes_season, "_refresh_rosters", lambda *a, **k: True)
     return captured
 
 
@@ -228,3 +232,25 @@ def test_apply_writes_the_lineup_and_records_activity(drafted_league, monkeypatc
         ).first()
         assert row is not None and row.status == "applied"
         assert "TEST-SWID" not in (row.summary or "") and "test-s2" not in (row.summary or "")
+
+
+def test_apply_refreshes_rosters_before_diffing(drafted_league, monkeypatch):
+    # The staleness fix: the lineup diff must be computed against ESPN's real
+    # current roster, so a refresh runs before set_lineup. (Without it, a move
+    # ESPN already applied is re-sent and refused as TRAN_ROSTER_SAME_SLOT.)
+    _grant_auto_mode(drafted_league)
+    _set_espn_cookies()
+    from app.api import routes_season
+
+    order = []
+    monkeypatch.setattr(routes_season.lineup_write, "set_lineup", lambda **k: (
+        order.append("write"),
+        routes_season.lineup_write.LineupResult(True, 200, "u", k.get("moves", []), "{}"),
+    )[1])
+    monkeypatch.setattr(routes_season, "_refresh_rosters",
+                        lambda *a, **k: order.append("refresh") or True)
+
+    resp = drafted_league.post("/api/season/lineup/apply", json={"confirm": True})
+    assert resp.status_code == 200, resp.text
+    # Refreshed first, then wrote.
+    assert order and order[0] == "refresh" and "write" in order

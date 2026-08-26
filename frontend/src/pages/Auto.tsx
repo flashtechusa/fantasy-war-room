@@ -191,17 +191,23 @@ export default function Auto() {
               {lineupResult && (
                 <div style={{ marginTop: 8 }}>
                   <Banner kind={lineupResult.ok ? 'info' : 'error'}>
-                    {lineupResult.ok
-                      ? `Lineup applied to ESPN (HTTP ${lineupResult.status_code}). ${lineupResult.moves.length} move(s).`
-                      : `ESPN did not accept it (HTTP ${lineupResult.status_code}).`}
+                    {!lineupResult.ok
+                      ? `ESPN did not accept it (HTTP ${lineupResult.status_code}).`
+                      : lineupResult.moves.length === 0
+                        ? 'Your lineup is already optimal on ESPN — no change needed.'
+                        : `Lineup applied to ESPN. ${lineupResult.moves.length} move(s).`}
                     {lineupResult.moves.length > 0 && (
                       <div className="tiny" style={{ marginTop: 4 }}>
                         {lineupResult.moves.map((m) => `${m.name}: ${m.from_slot}→${m.to_slot}`).join(', ')}
                       </div>
                     )}
-                    <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
-                      {lineupResult.response}
-                    </div>
+                    {/* Show ESPN's raw response only when there is something to act on
+                        (a rejection); a clean apply doesn't need the JSON. */}
+                    {!lineupResult.ok && (
+                      <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                        {lineupResult.response}
+                      </div>
+                    )}
                   </Banner>
                 </div>
               )}
