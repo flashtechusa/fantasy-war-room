@@ -249,6 +249,25 @@ def set_auto_mode(
     return {"enabled": bool(effective_settings(session).auto_mode_enabled)}
 
 
+@router.post("/auto-mode/run")
+def run_auto_mode(
+    session: Session = Depends(get_db),
+    owner: User = Depends(owner_only),
+) -> dict:
+    """Run one autonomous Auto Mode cycle now, for every eligible user. Owner only.
+
+    Identical to what the scheduled Windows task fires -- a way to trigger and
+    watch the whole install's cycle on demand. Does nothing when the install
+    switch is off or no account is fully enabled.
+    """
+    from ..services.automode_runner import run_cycle
+
+    result = run_cycle(session)
+    log.info("Auto Mode cycle run on demand by %s: %s user(s).",
+             owner.username, len(result.get("ran", [])))
+    return result
+
+
 @router.patch("/beta-requests/{request_id}")
 def mark_request(
     request_id: int,

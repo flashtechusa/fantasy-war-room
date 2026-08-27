@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db import get_db
-from ..engine.roster import build_optimal_lineup
 from ..engine.roster_move import active_roster_limit, analyse_roster_move
 from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
@@ -21,7 +20,6 @@ from datetime import timedelta
 
 from ..espn import lineup_write, trade_write, waiver_write
 from ..espn.client import EspnConnectionError, EspnNotConfigured
-from ..espn.constants import normalise_slot_label
 from ..espn.redaction import redact
 from ..models import AutoModeRun, League, Player, TradeSendLog, WaiverClaimLog, utcnow
 from ..services import season as season_service
@@ -845,42 +843,11 @@ def _auto_run(session, *, user, tier, statusname, summary):
     session.commit()
 
 
-def _current_slots_by_id(team) -> dict[int, str]:
-    """Where ESPN currently has each of my players, keyed by player id."""
-    out: dict[int, str] = {}
-    for entry in (getattr(team, "roster", None) or []):
-        pid = entry.get("espn_player_id")
-        if pid:
-            out[int(pid)] = normalise_slot_label(entry.get("slot")) or "BE"
-    return out
-
-
 def _refresh_rosters(session, settings) -> bool:
-    """Re-pull team rosters (with lineup slots) from ESPN before a write.
-
-    A write we made -- or one the user made on ESPN directly -- leaves our stored
-    roster slots stale, so a lineup diff computed against them proposes moves ESPN
-    has already applied and is refused as redundant (TRAN_ROSTER_SAME_SLOT), and a
-    waiver diff can target a player already gone. Refreshing the teams (not the
-    whole player pool, so it is cheap) means every write is computed against ESPN's
-    real current roster. Fails soft: a refresh error falls back to the stored
-    roster and lets the write proceed rather than blocking on a transient read.
-    """
-    from ..services import board as board_service
+    """Refresh team rosters from ESPN before a write (see importer.refresh_rosters)."""
     from ..services import importer
 
-    try:
-        importer.import_league(
-            session, build_provider(settings), settings,
-            include_players=False, include_history=False,
-        )
-        board_service.clear_cache()
-        return True
-    except Exception:      # noqa: BLE001 - a stale-but-present roster still writes
-        # Undo any partial import so the rest of the handler sees a clean session.
-        session.rollback()
-        log.warning("Roster refresh before an ESPN write failed; using stored roster.")
-        return False
+    return importer.refresh_rosters(session, settings)
 
 
 @router.post("/lineup/apply")
@@ -933,22 +900,9 @@ def lineup_apply(
         refuse(status.HTTP_409_CONFLICT, "no_roster",
                "No roster found for your team. Import your league first.")
 
-    roster = engine.roster_players(my_ids)
-    optimal = build_optimal_lineup(roster, engine.shape)
-    names = {p.espn_player_id: p.name for p in roster}
-    # Every rostered player's target slot: a starting-slot label, or bench.
-    optimal_slot_by_id = {
-        s.player.espn_player_id: s.slot for s in optimal.starters if s.player
-    }
-    for p in optimal.bench:
-        optimal_slot_by_id.setdefault(p.espn_player_id, "BE")
+    from ..services import automode
 
-    current_slot_by_id = _current_slots_by_id(mine)
-    moves = lineup_write.build_moves(
-        optimal_slot_by_id=optimal_slot_by_id,
-        current_slot_by_id=current_slot_by_id,
-        names=names,
-    )
+    moves = automode.lineup_moves(engine, my_ids, automode.current_slots_by_id(mine))
 
     scoring_period_id = _resolve_week(payload.week, settings)
     result = lineup_write.set_lineup(
@@ -1331,3 +1285,30 @@ def automode_settings(
         },
         "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
     }
+
+
+@router.post("/automode/run")
+def automode_run_now(
+    session: Session = Depends(get_db),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_auto_mode),
+) -> dict:
+    """Run *my* Auto Mode cycle now -- exactly what the scheduler does, on demand.
+
+    The same autonomous cycle the Windows task fires, scoped to the calling user,
+    so a permitted user can trigger and watch it without waiting for the schedule.
+    Requires the granted capability (dependency); the cycle itself still enforces
+    the install switch and the user's own opt-in, and writes nothing otherwise.
+    """
+    from ..services import automode_runner
+
+    result = automode_runner.run_cycle(session, only_user_id=user.id)
+    if not result.get("install_enabled"):
+        return {"ran": False, "reason": "Auto Mode is switched off for this installation.",
+                "actions": []}
+    mine = next((r for r in result.get("ran", []) if r.get("user") == user.username), None)
+    if mine is None:
+        return {"ran": False,
+                "reason": "Turn on your Auto Mode opt-in (and at least one tier) first.",
+                "actions": []}
+    return {"ran": True, "actions": mine.get("actions", [])}

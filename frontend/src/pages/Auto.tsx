@@ -44,6 +44,8 @@ export default function Auto() {
   const [applyingLineup, setApplyingLineup] = useState(false)
   const [lineupResult, setLineupResult] = useState<LineupApplyResult | null>(null)
   const [lineupErr, setLineupErr] = useState<string | null>(null)
+  const [running, setRunning] = useState(false)
+  const [runResult, setRunResult] = useState<string | null>(null)
 
   const s = status.data
 
@@ -73,6 +75,30 @@ export default function Auto() {
       setErr((e as Error).message)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function runNow() {
+    setRunning(true)
+    setRunResult(null)
+    setErr(null)
+    try {
+      const result = await api.runAutoModeNow()
+      setRunResult(
+        !result.ran
+          ? result.reason || 'Nothing to run.'
+          : result.actions.length === 0
+            ? 'Cycle ran — no tiers enabled to act on.'
+            : 'Cycle ran: ' +
+              result.actions
+                .map((a) => `${a.tier} ${a.status}${a.moves ? ` (${a.moves} move${a.moves === 1 ? '' : 's'})` : ''}`)
+                .join(', '),
+      )
+      status.reload()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setRunning(false)
     }
   }
 
@@ -120,6 +146,25 @@ export default function Auto() {
               onClick={() => save({ auto_waivers: !s.tiers.waivers })} />
             <Toggle label="Trades" on={s.tiers.trades} disabled={busy}
               onClick={() => save({ auto_trades: !s.tiers.trades })} />
+          </div>
+        )}
+
+        {/* Run the same cycle the scheduler fires, on demand -- so you can watch
+            Auto Mode act without waiting for the next scheduled run. */}
+        {canOptIn && active && (
+          <div style={{ marginTop: 12 }}>
+            <button className="btn" disabled={running || busy} onClick={runNow}>
+              {running ? 'Running…' : 'Run Auto Mode now'}
+            </button>
+            {runResult && (
+              <div style={{ marginTop: 8 }}>
+                <Banner kind="info">{runResult}</Banner>
+              </div>
+            )}
+            <div className="tiny faint" style={{ marginTop: 6 }}>
+              Runs your enabled tiers immediately — the same thing the scheduler
+              does on its own. Currently that means setting your optimal lineup.
+            </div>
           </div>
         )}
 

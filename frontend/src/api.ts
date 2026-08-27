@@ -1200,6 +1200,14 @@ export const api = {
       body: JSON.stringify({ confirm }),
     }),
 
+  // Run my Auto Mode cycle now -- exactly what the scheduler does, on demand.
+  runAutoModeNow: () =>
+    request<{
+      ran: boolean
+      reason?: string
+      actions: { tier: string; status: string; moves?: number; detail?: string }[]
+    }>('/api/season/automode/run', { method: 'POST' }),
+
   // Waiver add/drop (or FAAB claim) to ESPN, gated like Auto Mode's lineup write.
   applyWaiver: (body: { add_id: number; drop_id?: number | null; bid?: number }) =>
     request<WaiverApplyResult>('/api/season/waiver/apply', {

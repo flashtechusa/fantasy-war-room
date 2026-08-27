@@ -80,6 +80,35 @@ def get_active_league(session: Session, settings: Settings | None = None) -> Lea
     ).first()
 
 
+def refresh_rosters(session: Session, settings: Settings) -> bool:
+    """Re-pull team rosters (with lineup slots) from ESPN before a write.
+
+    A write we made -- or one the user made on ESPN directly -- leaves our stored
+    roster slots stale, so a lineup diff computed against them proposes moves ESPN
+    has already applied (refused as redundant), and a waiver diff can target a
+    player already gone. Refreshing the teams (not the whole player pool, so it is
+    cheap) means every write is computed against ESPN's real current roster.
+
+    Also re-identifies which team is mine from these settings' SWID, so the same
+    call serves the autonomous cycle: refreshing with one user's cookies points
+    `is_mine` at that user's team. Fails soft -- a refresh error rolls back and
+    returns False so the caller can fall back to the stored roster.
+    """
+    from .board import clear_cache
+
+    try:
+        import_league(
+            session, build_provider(settings), settings,
+            include_players=False, include_history=False,
+        )
+        clear_cache()
+        return True
+    except Exception:      # noqa: BLE001 - a stale-but-present roster still writes
+        session.rollback()
+        log.warning("Roster refresh before an ESPN write failed; using stored roster.")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # League import
 # ---------------------------------------------------------------------------

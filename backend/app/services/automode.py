@@ -78,6 +78,42 @@ def is_active(*, install_on: bool, capable: bool, user_on: bool) -> bool:
     return bool(install_on and capable and user_on)
 
 
+def current_slots_by_id(team) -> dict[int, str]:
+    """Where ESPN currently has each of a team's players, keyed by player id."""
+    from ..espn.constants import normalise_slot_label
+
+    out: dict[int, str] = {}
+    for entry in (getattr(team, "roster", None) or []):
+        pid = entry.get("espn_player_id")
+        if pid:
+            out[int(pid)] = normalise_slot_label(entry.get("slot")) or "BE"
+    return out
+
+
+def lineup_moves(engine, my_ids, current_slots):
+    """The slot changes to turn a team's current lineup into its optimal one.
+
+    Shared by the on-demand apply endpoint and the autonomous cycle so both diff
+    the optimal lineup against ESPN's real slots identically. Only players whose
+    slot changes produce a move.
+    """
+    from ..espn import lineup_write
+
+    roster = engine.roster_players(my_ids)
+    optimal = build_optimal_lineup(roster, engine.shape)
+    names = {p.espn_player_id: p.name for p in roster}
+    optimal_slot_by_id = {
+        s.player.espn_player_id: s.slot for s in optimal.starters if s.player
+    }
+    for p in optimal.bench:
+        optimal_slot_by_id.setdefault(p.espn_player_id, "BE")
+    return lineup_write.build_moves(
+        optimal_slot_by_id=optimal_slot_by_id,
+        current_slot_by_id=current_slots,
+        names=names,
+    )
+
+
 def _current_starter_ids(team) -> set[int]:
     """Player ids ESPN currently has in a *starting* slot (not bench/IR)."""
     out: set[int] = set()
