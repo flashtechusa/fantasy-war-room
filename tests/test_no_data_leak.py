@@ -148,3 +148,54 @@ class TestOnceTheyConnectTheirOwn:
         with session_scope() as session:
             ari = session.query(User).filter(User.username == "ari").one()
             assert settings_for_user(session, ari, get_settings()).espn_s2 != "owner-cookie"
+
+
+class TestTheFantasyProsKeyIsPerUser:
+    """A paid, install-wide FantasyPros key must never reach another account.
+
+    Reported from real use: a client used FantasyPros without ever supplying a
+    key -- the install-wide key leaked through the settings `base` because the
+    client path stripped the ESPN cookies but not the FantasyPros key.
+    """
+
+    def _install_key(self):
+        from app.db import session_scope
+        from app.services.runtime_config import write_overrides
+
+        with session_scope() as session:
+            write_overrides(session, {"fantasypros_api_key": "OWNER-PAID-KEY"})
+
+    def test_a_client_never_inherits_the_install_wide_key(self, owner_with_league):
+        self._install_key()
+        from app.config import get_settings
+        from app.db import session_scope
+        from app.models import User
+        from app.services.runtime_config import settings_for_user
+
+        with session_scope() as session:
+            ari = session.query(User).filter(User.username == "ari").one()
+            resolved = settings_for_user(session, ari, get_settings())
+            assert resolved.fantasypros_api_key is None
+
+    def test_the_owner_still_inherits_the_install_wide_key(self, owner_with_league):
+        self._install_key()
+        from app.config import get_settings
+        from app.db import session_scope
+        from app.models import User
+        from app.services.runtime_config import settings_for_user
+
+        with session_scope() as session:
+            owner = session.query(User).filter(User.username == "owner").one()
+            resolved = settings_for_user(session, owner, get_settings())
+            assert resolved.fantasypros_api_key == "OWNER-PAID-KEY"
+
+    def test_a_client_status_shows_no_key_even_with_an_install_key(self, owner_with_league):
+        self._install_key()
+        client = owner_with_league["client"]
+        sign_in(client, owner_with_league["ari"])
+        client.put("/api/config/mine", json={"espn_league_id": 555111, "espn_season": 2026})
+        status = client.get("/api/league/projections/status")
+        # A client with their own league but no key of their own must be told so.
+        if status.status_code == 200:
+            fp = status.json()["fantasypros"]
+            assert fp["key_set"] is False and fp["own_key"] is False

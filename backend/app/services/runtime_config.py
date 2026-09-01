@@ -154,25 +154,38 @@ def settings_for_user(session: Session, user, base: Settings | None = None) -> S
 
     base = effective_settings(session, base)
     config = user_config(session, user)
+    is_owner = getattr(user, "role", None) == "owner"
 
     # Per-user projection source and key, applied regardless of whether the user
     # has their own league (owners use the install league but still choose their
     # own projection source). Default "espn" preserves the historical board.
     mode = resolve_projection_mode(config)
-    fp_key = None
+
+    # The FantasyPros key is a paid, per-user secret. A user only ever uses their
+    # OWN stored key; the install-wide key (env or an /api/config override) is the
+    # owner's, and only the owner inherits it -- exactly like the ESPN connection.
+    # Without this, a client with no key of their own inherited the install-wide
+    # key through `base`, so the owner's key silently drove every account's board.
+    own_fp_key = None
     if config is not None and getattr(config, "fantasypros_api_key_encrypted", None):
-        fp_key = secret_store.decrypt(config.fantasypros_api_key_encrypted)
+        own_fp_key = secret_store.decrypt(config.fantasypros_api_key_encrypted)
+    fp_key = own_fp_key or (base.fantasypros_api_key if is_owner else None)
+
+    # FantasyPros needs a key. A user who selected it but has no usable key (e.g.
+    # a client who picked it while the owner's key was still leaking through)
+    # falls back to the ESPN board rather than silently riding the owner's key.
+    if mode == "fantasypros" and not fp_key:
+        mode = "espn"
 
     def _apply_user_projection(settings: Settings) -> Settings:
-        update: dict = {
+        # Always set the key (to None when the user has none of their own), so the
+        # install-wide key in `settings` can never leak through to a non-owner.
+        return settings.model_copy(update={
             "projection_mode": mode,
             "use_sleeper_projections": mode == "sleeper",
-        }
-        if fp_key:
-            update["fantasypros_api_key"] = fp_key
-        return settings.model_copy(update=update)
+            "fantasypros_api_key": fp_key,
+        })
 
-    is_owner = getattr(user, "role", None) == "owner"
     if config is None or config.espn_league_id is None:
         if is_owner:
             return _apply_user_projection(base)
