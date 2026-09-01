@@ -279,4 +279,8 @@ def sync_from_espn(
         "source": attempt.source,
         "skipped": skipped,
         "synced_at": draft.last_synced_at,
+        # So the Live Draft screen can auto-follow a draft that is actually
+        # running (and say so when ESPN does not report one in progress).
+        "in_progress": attempt.espn_draft_in_progress,
+        "complete": attempt.espn_draft_complete,
     }

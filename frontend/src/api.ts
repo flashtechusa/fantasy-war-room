@@ -1033,10 +1033,15 @@ export const api = {
       body: JSON.stringify({ my_draft_slot: slot }),
     }),
   sync: () =>
-    request<{ synced: boolean; added?: number; reason?: string; draft: DraftState }>(
-      '/api/draft/sync',
-      { method: 'POST' },
-    ),
+    request<{
+      synced: boolean
+      added?: number
+      reason?: string
+      in_progress?: boolean
+      complete?: boolean
+      total_espn_picks?: number
+      draft: DraftState
+    }>('/api/draft/sync', { method: 'POST' }),
 
   team: () => request<TeamResponse>('/api/team'),
 

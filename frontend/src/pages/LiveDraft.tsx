@@ -40,6 +40,37 @@ export default function LiveDraft() {
     refresh()
   }, [])
 
+  // Pull the live ESPN draft as soon as the screen opens, and keep following it
+  // if one is running. Without this, someone who opens Live Draft mid-draft --
+  // e.g. after joining late -- sees a board frozen at pick 1 unless they happen
+  // to know to turn "ESPN sync" on and wait for the next poll. The backfill adds
+  // every pick already made, so a late arrival catches up in one call.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const result = await api.sync()
+        if (cancelled) return
+        if (result.synced && result.added) {
+          setSyncNote(`Pulled ${result.added} pick(s) from ESPN`)
+          await refresh()
+        } else if (result.synced && !result.in_progress && !result.total_espn_picks) {
+          setSyncNote('ESPN did not report a draft in progress yet. Manual entry works meanwhile.')
+        } else if (!result.synced && result.reason) {
+          setSyncNote(result.reason)
+        }
+        // Auto-follow only a draft ESPN says is live, so polling doesn't run
+        // pointlessly before or long after the draft.
+        if (result.in_progress) setAutoSync(true)
+      } catch {
+        // Best-effort: manual entry always works, so a failed backfill is silent.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // Optional ESPN polling. The backend rate-limits this independently, so a
   // fast interval here can't turn into a fast request rate against ESPN.
   useEffect(() => {

@@ -350,6 +350,9 @@ class TestSyncRecordsDiagnostics:
         synced = client.post("/api/draft/sync").json()
         assert synced["added"] == 3
         assert synced["source"] == "espn_draft_detail"
+        # The Live Draft screen uses these to auto-follow a running draft.
+        assert synced["in_progress"] is True
+        assert synced["total_espn_picks"] == 3
 
         body = client.get("/api/draft/diagnostics").json()
         assert body["picks"]["espn_latest_pick"] == 3
