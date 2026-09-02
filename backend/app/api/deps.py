@@ -61,8 +61,13 @@ def engine_dep(
     # pick one source with ESPN fallback per uncovered player; "consensus" blends
     # whatever sources have data. Resolved from the user's saved projection_mode.
     mode = settings.projection_mode or "espn"
+    # FantasyPros contributes only for a user who has their own key (the owner
+    # included). settings_for_user already resolves the key strictly per-user, so
+    # a non-owner without one gets allow_fantasypros=False and never sees the
+    # install-wide FantasyPros data on their board or weekly numbers.
+    allow_fp = bool(settings.fantasypros_api_key)
     try:
-        return build_engine(session, league, active_source=mode)
+        return build_engine(session, league, active_source=mode, allow_fantasypros=allow_fp)
     except LeagueNotImported as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

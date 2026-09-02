@@ -107,7 +107,14 @@ _NATIVE_SOURCES = ("espn", "demo")
 _CONSENSUS_SOURCES = ("espn", "demo", "sleeper", "fantasypros")
 
 
-def _resolve_weights(session: Session, mode: str | None) -> tuple[dict[str, float], str]:
+def _drop_fantasypros(weights: dict[str, float]) -> dict[str, float]:
+    """Strip FantasyPros from a weight set (for a user without their own key)."""
+    return {k: v for k, v in weights.items() if k != "fantasypros"}
+
+
+def _resolve_weights(
+    session: Session, mode: str | None, allow_fantasypros: bool = True
+) -> tuple[dict[str, float], str]:
     """Turn a projection *mode* into source weights and a display label.
 
     - ``None``/``""``/``"default"`` -> the historical enabled-source blend,
@@ -125,6 +132,10 @@ def _resolve_weights(session: Session, mode: str | None) -> tuple[dict[str, floa
       average against zero.
     - any other single key -> that source exclusively (forward compatibility).
     """
+    # FantasyPros is a paid, per-user source: it only ever contributes for a user
+    # who has their own key (the owner included). Without one it is stripped from
+    # every blend here -- the default enabled set and consensus alike -- so an
+    # install-wide FantasyPros import never reaches an account that did not pay.
     if mode in (None, "", "default"):
         weights = {
             source.key: source.weight
@@ -134,17 +145,28 @@ def _resolve_weights(session: Session, mode: str | None) -> tuple[dict[str, floa
         }
         if not weights:
             weights = {"espn": 1.0, "demo": 1.0}
+        if not allow_fantasypros:
+            weights = _drop_fantasypros(weights) or {"espn": 1.0, "demo": 1.0}
         return weights, ("+".join(sorted(weights)) or "espn")
     if mode == "espn":
         return {key: 1.0 for key in _NATIVE_SOURCES}, "espn"
     if mode == "consensus":
-        return {key: 1.0 for key in _CONSENSUS_SOURCES}, "consensus"
+        keys = _CONSENSUS_SOURCES if allow_fantasypros else _drop_fantasypros(
+            {k: 1.0 for k in _CONSENSUS_SOURCES}
+        )
+        return {key: 1.0 for key in keys}, "consensus"
+    if mode == "fantasypros" and not allow_fantasypros:
+        # No key: fall back to the native board rather than an empty source.
+        return {key: 1.0 for key in _NATIVE_SOURCES}, "espn"
     # A single named source, used exclusively.
     return {mode: 1.0}, mode
 
 
 def build_engine(
-    session: Session, league: League, active_source: str | None = None
+    session: Session,
+    league: League,
+    active_source: str | None = None,
+    allow_fantasypros: bool = True,
 ) -> ValuationEngine:
     """Cached ValuationEngine for a league.
 
@@ -167,13 +189,14 @@ def build_engine(
         latest_player,
         league.source,
         active_source or "",
+        allow_fantasypros,
         tuple(sorted((r.stat_id, r.points) for r in league.scoring_rules)),
     )
     cached = _cache.get(key)
     if cached is not None:
         return cached.engine
 
-    weights, projection_source = _resolve_weights(session, active_source)
+    weights, projection_source = _resolve_weights(session, active_source, allow_fantasypros)
 
     # Scoped to the league's own provider. Real and synthetic players share one
     # season-keyed table, so without this a demo import puts fake players into
@@ -224,6 +247,9 @@ def build_engine(
         source=league.source,
         projection_source=projection_source,
     )
+    # Carried so the weekly-scoring path (season.build_weekly_players) applies the
+    # same per-user FantasyPros gating as this season board.
+    engine.allow_fantasypros = allow_fantasypros
     _cache[key] = _CacheEntry(key=key, engine=engine)
     # Bound it: a busy install should not accumulate an engine per league
     # forever, and rebuilding one is cheap next to serving a stale board.

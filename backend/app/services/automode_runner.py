@@ -81,7 +81,10 @@ def _apply_lineup(session, league, settings, user, mine) -> dict:
     """Set this user's optimal lineup on ESPN. The same write the Auto tab makes."""
     from ..espn import lineup_write
 
-    engine = build_engine(session, league, active_source=settings.projection_mode or "espn")
+    engine = build_engine(
+        session, league, active_source=settings.projection_mode or "espn",
+        allow_fantasypros=bool(settings.fantasypros_api_key),
+    )
     my_ids = season_service.my_roster_ids(session, league)
     if not my_ids:
         _log(session, user, "lineup", "skipped", "No roster found for your team.")

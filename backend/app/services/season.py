@@ -36,10 +36,20 @@ def _enabled_sources(session: Session) -> dict[str, float]:
 
 
 def weekly_points_by_player(
-    session: Session, league: League, scoring: LeagueScoring, week: int
+    session: Session,
+    league: League,
+    scoring: LeagueScoring,
+    week: int,
+    allow_fantasypros: bool = True,
 ) -> dict[int, float]:
     """{espn_player_id: points for this week} under the league's own rules."""
     weights = _enabled_sources(session)
+    if not allow_fantasypros:
+        # A user without their own FantasyPros key never gets its weekly numbers,
+        # matching the season board (see board._resolve_weights).
+        weights = {k: v for k, v in weights.items() if k != "fantasypros"} or {
+            "espn": 1.0, "demo": 1.0
+        }
 
     rows = session.execute(
         select(PlayerWeeklyProjection, Player)
@@ -85,7 +95,10 @@ def build_weekly_players(
     silently passes for a real projection is worse than no number at all.
     """
     scoring = engine.scoring
-    week_points = weekly_points_by_player(session, league, scoring, week)
+    week_points = weekly_points_by_player(
+        session, league, scoring, week,
+        allow_fantasypros=getattr(engine, "allow_fantasypros", True),
+    )
 
     stmt = select(Player).where(
         Player.season == league.season, Player.source == league.source

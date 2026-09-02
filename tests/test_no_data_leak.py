@@ -189,6 +189,21 @@ class TestTheFantasyProsKeyIsPerUser:
             resolved = settings_for_user(session, owner, get_settings())
             assert resolved.fantasypros_api_key == "OWNER-PAID-KEY"
 
+    def test_the_board_weights_drop_fantasypros_without_a_key(self, owner_with_league):
+        """The season board excludes FantasyPros for a user with no key of theirs."""
+        from app.db import session_scope
+        from app.services.board import _resolve_weights
+
+        with session_scope() as session:
+            # Consensus: FantasyPros is in the blend with a key, gone without one.
+            keyed, _ = _resolve_weights(session, "consensus", allow_fantasypros=True)
+            keyless, _ = _resolve_weights(session, "consensus", allow_fantasypros=False)
+            assert "fantasypros" in keyed
+            assert "fantasypros" not in keyless
+            # FantasyPros-only with no key falls back to the native board.
+            weights, label = _resolve_weights(session, "fantasypros", allow_fantasypros=False)
+            assert "fantasypros" not in weights and label == "espn"
+
     def test_a_client_status_shows_no_key_even_with_an_install_key(self, owner_with_league):
         self._install_key()
         client = owner_with_league["client"]
