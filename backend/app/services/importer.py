@@ -88,7 +88,14 @@ def data_age_seconds(session: Session, league: League) -> float | None:
         .order_by(Player.updated_at.desc())
         .limit(1)
     ).first()
-    return None if latest is None else (utcnow() - latest).total_seconds()
+    if latest is None:
+        return None
+    # SQLite returns naive datetimes even for timezone=True columns, while
+    # utcnow() is timezone-aware -- subtracting the two raises. Assume UTC for a
+    # naive value so the comparison is always valid.
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=timezone.utc)
+    return (utcnow() - latest).total_seconds()
 
 
 def refresh_rosters(session: Session, settings: Settings) -> bool:

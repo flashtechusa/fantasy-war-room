@@ -119,6 +119,29 @@ class TestPositionsAreNotCrowdedOut:
         assert body["free_agents_available"] >= body["free_agents_considered"]
 
 
+class TestPoolAgeIsTimezoneSafe:
+    def test_data_age_handles_a_naive_timestamp(self, drafted_league):
+        """Regression: utcnow() is tz-aware but SQLite returns naive datetimes, so
+        subtracting them raised and 500'd Week/Waivers once cookies were present."""
+        import datetime as dt
+
+        from app.db import session_scope
+        from app.models import League, Player
+        from app.services import importer
+
+        with session_scope() as session:
+            league = session.query(League).first()
+            # A naive timestamp, exactly what triggered the crash.
+            player = session.query(Player).filter(
+                Player.season == league.season, Player.source == league.source
+            ).first()
+            player.updated_at = dt.datetime(2020, 1, 1, 0, 0, 0)  # naive
+            session.commit()
+
+            age = importer.data_age_seconds(session, league)  # must not raise
+            assert age is not None and age > 0
+
+
 class TestRosteredPlayersAreNeverFreeAgents:
     def test_a_rostered_player_with_a_stale_flag_stays_off_the_wire(self, drafted_league):
         """Reported from real use: rostered stars (Gibbs, Nacua) showed as free

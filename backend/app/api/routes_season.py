@@ -99,19 +99,27 @@ def _refresh_pool_job(settings: Settings) -> None:
 def _maybe_refresh_pool(
     background_tasks: BackgroundTasks, session: Session, league: League, settings: Settings
 ) -> None:
-    """Schedule a background pool refresh when the data is stale and ESPN is connected."""
-    from ..services import importer
+    """Schedule a background pool refresh when the data is stale and ESPN is connected.
 
-    if not (settings.espn_swid and settings.espn_s2):
-        return  # No credentials (demo / not connected) -- nothing to refresh from.
-    now = time.monotonic()
-    if now - _last_pool_refresh.get(league.id, 0.0) < _POOL_REFRESH_MIN_INTERVAL:
-        return
-    age = importer.data_age_seconds(session, league)
-    if age is not None and age < _POOL_STALE_AFTER:
-        return
-    _last_pool_refresh[league.id] = now
-    background_tasks.add_task(_refresh_pool_job, settings)
+    Wrapped so it can NEVER break the page: this is a best-effort freshness
+    optimization, so any failure here is swallowed and the (possibly stale) board
+    is served rather than a 500.
+    """
+    try:
+        from ..services import importer
+
+        if not (settings.espn_swid and settings.espn_s2):
+            return  # No credentials (demo / not connected) -- nothing to refresh from.
+        now = time.monotonic()
+        if now - _last_pool_refresh.get(league.id, 0.0) < _POOL_REFRESH_MIN_INTERVAL:
+            return
+        age = importer.data_age_seconds(session, league)
+        if age is not None and age < _POOL_STALE_AFTER:
+            return
+        _last_pool_refresh[league.id] = now
+        background_tasks.add_task(_refresh_pool_job, settings)
+    except Exception:      # noqa: BLE001 - freshness must never break the screen
+        log.warning("Skipping background pool refresh (non-fatal).")
 
 
 # ---------------------------------------------------------------------------
