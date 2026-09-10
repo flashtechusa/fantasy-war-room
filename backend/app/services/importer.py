@@ -80,6 +80,17 @@ def get_active_league(session: Session, settings: Settings | None = None) -> Lea
     ).first()
 
 
+def data_age_seconds(session: Session, league: League) -> float | None:
+    """How long since the player pool was last imported, or None if empty."""
+    latest = session.scalars(
+        select(Player.updated_at)
+        .where(Player.season == league.season, Player.source == league.source)
+        .order_by(Player.updated_at.desc())
+        .limit(1)
+    ).first()
+    return None if latest is None else (utcnow() - latest).total_seconds()
+
+
 def refresh_rosters(session: Session, settings: Settings) -> bool:
     """Re-pull team rosters (with lineup slots) from ESPN before a write.
 

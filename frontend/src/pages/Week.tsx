@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { api } from '../api'
-import { Banner, Card, Loading, Pos } from '../components'
+import { Banner, Card, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
 export default function Week() {
@@ -103,6 +103,7 @@ export default function Week() {
                       <>
                         <div style={{ fontWeight: 650 }}>
                           {entry.player.name}{' '}
+                          <InjuryTag status={entry.player.injury_status} />
                           {entry.warning && <span title={entry.warning}>⚠</span>}
                           {entry.close_call && (
                             <span className="pill" style={{ marginLeft: 4 }}>
@@ -163,6 +164,7 @@ export default function Week() {
                   <tr key={player.espn_player_id}>
                     <td>
                       {player.name}
+                      <InjuryTag status={player.injury_status} />
                       {player.on_bye && <span className="faint tiny"> · BYE</span>}
                     </td>
                     <td>

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { api, type WaiverApplyResult } from '../api'
-import { Banner, Card, Loading, Pos } from '../components'
+import { Banner, Card, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
 const VERDICT_COLOR: Record<string, string> = {
@@ -215,6 +215,7 @@ export default function Waivers() {
                 <div className="row" style={{ gap: 7 }}>
                   <span className="mono faint">{index + 1}</span>
                   <span style={{ fontWeight: 700, fontSize: 16 }}>{target.player.name}</span>
+                  <InjuryTag status={target.player.injury_status} />
                 </div>
                 <div className="row wrap" style={{ gap: 6, marginTop: 4 }}>
                   <Pos position={target.player.position} />

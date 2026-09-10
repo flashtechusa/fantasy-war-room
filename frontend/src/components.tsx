@@ -55,6 +55,30 @@ export function pct(value: number): string {
   return `${Math.round(value * 100)}%`
 }
 
+//: ESPN injury status -> a short, clear badge. ACTIVE/NORMAL show nothing.
+const INJURY_BADGE: Record<string, { label: string; color: string }> = {
+  OUT: { label: 'OUT', color: 'var(--danger)' },
+  INJURY_RESERVE: { label: 'IR', color: 'var(--danger)' },
+  SUSPENSION: { label: 'SUSP', color: 'var(--danger)' },
+  DOUBTFUL: { label: 'D', color: 'var(--danger)' },
+  QUESTIONABLE: { label: 'Q', color: 'var(--warn)' },
+  DAY_TO_DAY: { label: 'DTD', color: 'var(--warn)' },
+}
+
+export function InjuryTag({ status }: { status?: string | null }) {
+  const badge = INJURY_BADGE[(status || '').toUpperCase()]
+  if (!badge) return null
+  return (
+    <span
+      className="pill"
+      title={`Injury: ${status}`}
+      style={{ marginLeft: 5, color: badge.color, fontWeight: 800, fontSize: 11 }}
+    >
+      {badge.label}
+    </span>
+  )
+}
+
 /** Compact player card. Tapping opens the detail sheet. */
 export function PlayerCard({
   player,

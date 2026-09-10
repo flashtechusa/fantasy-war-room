@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -64,12 +65,63 @@ def _resolve_week(week: int | None, settings: Settings) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Self-freshening: keep injuries, byes and rosters current without a manual
+# "Refresh players". The weekly screens read the stored pool, which used to go
+# stale until someone pressed the button -- so a doubtful player showed no tag
+# and a bye wasn't reflected. When the pool is old, refresh it in the background
+# after answering, so the *next* load is current; the response stays fast.
+# ---------------------------------------------------------------------------
+
+#: Don't attempt a background refresh more than this often, per league.
+_POOL_REFRESH_MIN_INTERVAL = 30 * 60
+#: Consider the pool stale (worth refreshing) once it is older than this.
+_POOL_STALE_AFTER = 90 * 60
+_last_pool_refresh: dict[int, float] = {}
+
+
+def _refresh_pool_job(settings: Settings) -> None:
+    """Re-import the player pool and rosters. Runs in the background, own session."""
+    from ..db import session_scope
+    from ..services import importer
+
+    try:
+        with session_scope() as session:
+            league = importer.get_active_league(session, settings)
+            if league is None:
+                return
+            importer.import_players(session, league, build_provider(settings), settings)
+            importer.refresh_rosters(session, settings)
+        log.info("Background player-pool refresh complete.")
+    except Exception:      # noqa: BLE001 - best-effort; the manual button still works
+        log.warning("Background player-pool refresh failed.")
+
+
+def _maybe_refresh_pool(
+    background_tasks: BackgroundTasks, session: Session, league: League, settings: Settings
+) -> None:
+    """Schedule a background pool refresh when the data is stale and ESPN is connected."""
+    from ..services import importer
+
+    if not (settings.espn_swid and settings.espn_s2):
+        return  # No credentials (demo / not connected) -- nothing to refresh from.
+    now = time.monotonic()
+    if now - _last_pool_refresh.get(league.id, 0.0) < _POOL_REFRESH_MIN_INTERVAL:
+        return
+    age = importer.data_age_seconds(session, league)
+    if age is not None and age < _POOL_STALE_AFTER:
+        return
+    _last_pool_refresh[league.id] = now
+    background_tasks.add_task(_refresh_pool_job, settings)
+
+
+# ---------------------------------------------------------------------------
 # Start / sit
 # ---------------------------------------------------------------------------
 
 
 @router.get("/lineup")
 def start_sit(
+    background_tasks: BackgroundTasks,
     week: int | None = Query(None, ge=1, le=18),
     session: Session = Depends(get_db),
     league: League = Depends(league_dep),
@@ -77,6 +129,7 @@ def start_sit(
     settings: Settings = Depends(settings_dep),
 ) -> dict:
     """Your best starting lineup for a week, and why each call was made."""
+    _maybe_refresh_pool(background_tasks, session, league, settings)
     week = _resolve_week(week, settings)
     roster_ids = season_service.my_roster_ids(session, league)
     if not roster_ids:
@@ -176,6 +229,7 @@ def refresh_waivers(
 
 @router.get("/waivers")
 def waivers(
+    background_tasks: BackgroundTasks,
     week: int | None = Query(None, ge=1, le=18),
     limit: int = Query(15, ge=1, le=50),
     session: Session = Depends(get_db),
@@ -184,6 +238,7 @@ def waivers(
     settings: Settings = Depends(settings_dep),
 ) -> dict:
     """Free agents ranked by what they'd actually add to your lineup."""
+    _maybe_refresh_pool(background_tasks, session, league, settings)
     week = _resolve_week(week, settings)
     roster_ids = season_service.my_roster_ids(session, league)
     roster = season_service.build_weekly_players(
@@ -197,6 +252,14 @@ def waivers(
     everyone = season_service.build_weekly_players(
         session, league, engine, week, availability={"FREEAGENT", "WAIVERS"}
     )
+    # A player's stored availability can be stale after a draft or a trade, so it
+    # cannot be trusted alone: it was listing rostered stars (Gibbs, Nacua) as
+    # free agents. Anyone on any team's roster is by definition not a free agent,
+    # so exclude every rostered id -- the authoritative signal -- outright.
+    rostered_everywhere: set[int] = set()
+    for ids in season_service.rosters_by_team(session, league).values():
+        rostered_everywhere |= ids
+    everyone = [p for p in everyone if p.espn_player_id not in rostered_everywhere]
     by_position: dict[str, list] = {}
     for player in everyone:
         by_position.setdefault(player.position, []).append(player)

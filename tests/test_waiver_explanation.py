@@ -117,3 +117,41 @@ class TestPositionsAreNotCrowdedOut:
             f"kickers and defences never reached the wire: {sorted(positions)}"
         )
         assert body["free_agents_available"] >= body["free_agents_considered"]
+
+
+class TestRosteredPlayersAreNeverFreeAgents:
+    def test_a_rostered_player_with_a_stale_flag_stays_off_the_wire(self, drafted_league):
+        """Reported from real use: rostered stars (Gibbs, Nacua) showed as free
+        agents. Their stored availability was stale; the wire must key off who is
+        actually rostered, not that flag."""
+        from app.db import session_scope
+        from app.models import League, Player
+
+        # Every id on any team's roster, and one of them to sabotage.
+        with session_scope() as session:
+            league = session.query(League).first()
+            rostered: set[int] = set()
+            for team in league.teams:
+                for entry in team.roster or []:
+                    if entry.get("espn_player_id"):
+                        rostered.add(int(entry["espn_player_id"]))
+            assert rostered, "fixture has no rostered players to test with"
+            victim_id = next(iter(rostered))
+            # Simulate the stale flag that caused the bug.
+            victim = session.query(Player).filter(
+                Player.season == league.season,
+                Player.source == league.source,
+                Player.espn_player_id == victim_id,
+            ).first()
+            if victim is not None:
+                victim.availability = "FREEAGENT"
+                victim_name = victim.name
+            session.commit()
+
+        body = drafted_league.get("/api/season/waivers").json()
+        # No recommended target is a rostered player...
+        target_ids = {t["player"]["espn_player_id"] for t in body["targets"]}
+        assert not (target_ids & rostered), "a rostered player was offered on the wire"
+        # ...and the sabotaged rostered star never surfaces by name.
+        if victim is not None:
+            assert victim_name not in drafted_league.get("/api/season/waivers").text
