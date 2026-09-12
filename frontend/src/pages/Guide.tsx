@@ -134,6 +134,16 @@ export default function Guide() {
           one-tap approval; Auto Mode never sends them on its own. You choose
           which parts to turn on.
         </div>
+        <div className="small muted" style={{ marginTop: 8 }}>
+          <strong>Injured reserve.</strong> If your league has IR spots, Auto Mode
+          parks players tagged Out in them — an IR slot doesn't count against your
+          roster limit, so that's free bench room for a pickup. When one of them
+          heals, ESPN makes you move him back and <em>blocks every other roster
+          move until you do</em>. If there's no open spot, Auto Mode flags it on
+          the Auto tab and in the activity log rather than dropping anyone; set it
+          to <strong>Name the drop for me</strong> and it'll also point at your
+          lowest-value bench player, which you still confirm yourself.
+        </div>
       </Card>
 
       <Card title="5. Draft tools (draft day)">

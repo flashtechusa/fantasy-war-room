@@ -89,6 +89,7 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "auto_waivers": "BOOLEAN",
         "auto_trades": "BOOLEAN",
         "auto_faab_max": "INTEGER",
+        "auto_ir_return": "VARCHAR(16)",
     },
     "users": {
         "can_send_trades": "BOOLEAN",

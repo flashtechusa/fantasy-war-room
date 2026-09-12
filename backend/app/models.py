@@ -597,6 +597,11 @@ class UserEspnConfig(Base):
     auto_trades: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
     #: Cap on FAAB Auto Mode may spend on a single waiver claim (0 = no spend).
     auto_faab_max: Mapped[int | None] = mapped_column(Integer, nullable=True, default=0)
+    #: What Auto Mode does when a healed player must leave IR but the bench is
+    #: full: "alert" (default -- tell the user, change nothing) or "drop" (clear
+    #: the lowest-value bench player automatically). Dropping is irreversible,
+    #: so the safe option is the default and the user opts into the other.
+    auto_ir_return: Mapped[str | None] = mapped_column(String(16), nullable=True, default="alert")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )

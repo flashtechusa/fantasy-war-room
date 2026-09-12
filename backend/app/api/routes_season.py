@@ -55,6 +55,13 @@ def _serialize_player(player: WeeklyPlayer) -> dict:
     }
 
 
+def _serialize_ir(plan) -> dict:
+    """The IR picture: who to stash, who must come off, who is stuck there."""
+    from ..services.automode import serialize_ir
+
+    return serialize_ir(plan)
+
+
 def _resolve_week(week: int | None, settings: Settings) -> int:
     if week and week > 0:
         return week
@@ -280,6 +287,17 @@ def waivers(
     ]
 
     shape = league_shape(league)
+    # A player parked on IR does not occupy an active roster spot -- that is the
+    # point of the slot. Counting him made the wire demand a drop one player early,
+    # exactly when the IR stash had just freed the room to add somebody.
+    from ..services import automode
+
+    mine_team = season_service.my_team(session, league)
+    current_slots = automode.current_slots_by_id(mine_team) if mine_team else {}
+    ir_ids = {
+        pid for pid, slot in current_slots.items() if (slot or "").upper() == "IR"
+    }
+    active_roster = [p for p in roster if p.espn_player_id not in ir_ids]
     targets = recommend_waivers(
         roster=roster,
         free_agents=free_agents,
@@ -287,7 +305,7 @@ def waivers(
         week=week,
         faab_budget=league.acquisition_budget,
         faab_remaining=settings.faab_remaining,
-        roster_is_full=len(roster) >= shape.roster_size,
+        roster_is_full=len(active_roster) >= shape.roster_size,
         limit=limit,
     )
 
@@ -885,6 +903,9 @@ class AutoModeSettings(BaseModel):
     auto_waivers: bool | None = None
     auto_trades: bool | None = None
     auto_faab_max: int | None = Field(None, ge=0, le=1000)
+    #: "alert" (default) or "drop" -- what to do when a healed player must leave
+    #: IR but the bench is full. Dropping is irreversible, so it is opt-in.
+    auto_ir_return: str | None = Field(None, pattern="^(alert|drop)$")
 
 
 class LineupApplyRequest(BaseModel):
@@ -976,23 +997,47 @@ def lineup_apply(
     scoring_period_id = _resolve_week(payload.week, settings)
     # Scored for THIS week, so an OUT or bye player is actually benched.
     roster = automode.weekly_roster(session, league, engine, scoring_period_id, my_ids)
-    moves = automode.lineup_moves(
-        roster, engine.shape, automode.current_slots_by_id(mine)
+    current = automode.current_slots_by_id(mine)
+    # Stash the hurt, leave IR alone, and never move someone we cannot move.
+    from ..services import runtime_config
+
+    ir = automode.ir_plan_for(
+        roster, current, league,
+        ir_return=automode.resolve_ir_return(runtime_config.user_config(session, user)),
     )
-    result = lineup_write.set_lineup(
-        season=league.season,
-        league_id=league.espn_league_id,
-        team_id=mine.espn_team_id,
-        swid=settings.espn_swid,
-        espn_s2=settings.espn_s2,
-        scoring_period_id=scoring_period_id,
-        moves=moves,
-    )
+    moves, stash = automode.lineup_and_ir_moves(roster, engine.shape, current, ir)
+
+    def send(batch):
+        return lineup_write.set_lineup(
+            season=league.season,
+            league_id=league.espn_league_id,
+            team_id=mine.espn_team_id,
+            swid=settings.espn_swid,
+            espn_s2=settings.espn_s2,
+            scoring_period_id=scoring_period_id,
+            moves=batch,
+        )
+
+    result = send(moves)
+    # The stash is its own transaction: if this league refuses an OUT player in an
+    # IR slot, the lineup above still stands.
+    stash_result = send(stash) if (result.ok and stash) else None
+    if stash_result is not None and stash_result.ok:
+        moves = moves + stash
+        result.moves = result.moves + stash_result.moves
 
     move_summary = (
         "already optimal -- no change" if not moves
         else "; ".join(f"{m.name} {m.from_slot}->{m.to_slot}" for m in moves)
     )
+    if stash_result is not None and not stash_result.ok:
+        move_summary += (
+            f" (IR stash refused, HTTP {stash_result.status_code} -- "
+            "lineup itself applied)"
+        )
+    if ir.blocked:
+        _auto_run(session, user=user, tier="lineup", statusname="needs_attention",
+                  summary=automode.ir_blocked_message(ir))
     _auto_run(
         session, user=user, tier="lineup",
         statusname="applied" if result.ok else "rejected",
@@ -1012,6 +1057,7 @@ def lineup_apply(
             for m in result.moves
         ],
         "response": result.response,
+        "ir": _serialize_ir(ir),
     }
 
 
@@ -1258,6 +1304,7 @@ def _auto_plan_payload(plan) -> dict:
     return {
         "active": plan.active, "dry_run": plan.dry_run, "reason": plan.reason,
         "lineup": plan.lineup, "waivers": plan.waivers, "trades": plan.trades,
+        "ir": plan.ir,
     }
 
 
@@ -1316,6 +1363,7 @@ def automode_status(
             "trades": bool(getattr(config, "auto_trades", False)) if config else False,
         },
         "faab_max": int(getattr(config, "auto_faab_max", 0) or 0) if config else 0,
+        "ir_return": automode.resolve_ir_return(config),
         "plan": _auto_plan_payload(plan),
         "activity": [
             {"at": r.created_at, "tier": r.tier, "status": r.status, "summary": r.summary}
@@ -1341,10 +1389,14 @@ def automode_settings(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Auto Mode is not enabled for your account. Ask the league admin.",
         )
+    from ..services import automode as automode_service
     from ..services import runtime_config
 
     config = runtime_config._get_or_create_config(session, user)  # noqa: SLF001
-    for field_name in ("auto_mode", "auto_lineup", "auto_waivers", "auto_trades", "auto_faab_max"):
+    for field_name in (
+        "auto_mode", "auto_lineup", "auto_waivers", "auto_trades", "auto_faab_max",
+        "auto_ir_return",
+    ):
         value = getattr(payload, field_name)
         if value is not None:
             setattr(config, field_name, value)
@@ -1358,6 +1410,7 @@ def automode_settings(
             "trades": bool(getattr(config, "auto_trades", False)),
         },
         "faab_max": int(getattr(config, "auto_faab_max", 0) or 0),
+        "ir_return": automode_service.resolve_ir_return(config),
     }
 
 

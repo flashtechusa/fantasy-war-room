@@ -543,6 +543,7 @@ export interface AutoModeStatus {
   gates: { install_enabled: boolean; capable: boolean; user_enabled: boolean }
   tiers: { lineup: boolean; waivers: boolean; trades: boolean }
   faab_max: number
+  ir_return: 'alert' | 'drop'
   plan: {
     active: boolean
     dry_run: boolean
@@ -560,8 +561,25 @@ export interface AutoModeStatus {
     } | null
     waivers: { faab_max: number; status: string; note: string; write_enabled: boolean } | null
     trades: { headline: string | null; status: string; note: string } | null
+    ir: IrPlan | null
   }
   activity: { at: string; tier: string; status: string; summary: string }[]
+}
+
+export interface IrRow {
+  espn_player_id: number
+  name: string
+}
+
+export interface IrPlan {
+  ir_slots: number
+  ir_free: number
+  ir_return: 'alert' | 'drop'
+  to_ir: IrRow[]
+  from_ir: IrRow[]
+  blocked: IrRow[]
+  drop_candidate: IrRow | null
+  needs_attention: boolean
 }
 
 export interface LineupApplyResult {
@@ -569,6 +587,7 @@ export interface LineupApplyResult {
   status_code: number
   moves: { espn_player_id: number; name: string; from_slot: string; to_slot: string }[]
   response: string
+  ir?: IrPlan
 }
 
 export interface WaiverApplyResult {
@@ -1192,6 +1211,7 @@ export const api = {
     auto_waivers?: boolean
     auto_trades?: boolean
     auto_faab_max?: number
+    auto_ir_return?: 'alert' | 'drop'
   }) =>
     request<{ ok: boolean }>('/api/season/automode/settings', {
       method: 'POST',

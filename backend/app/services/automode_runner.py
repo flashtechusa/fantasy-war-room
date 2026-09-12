@@ -11,6 +11,11 @@ Staging, same discipline as every other write here:
 
     LINEUP  -- executes. It only touches your own team and is fully reversible,
                and its ESPN write is verified, so the cycle performs it.
+    IR      -- executes, as a *second* transaction: parking an Out player in an IR
+               slot is reversible and frees a roster spot, but leagues differ on
+               what tag ESPN accepts there, so a refusal must not take the week's
+               lineup down with it. A healed player who cannot come off IR is
+               reported, never dropped -- a drop is irreversible.
     WAIVERS -- planned and logged only (AUTO_WAIVER_EXECUTE is False). A drop is
                not reversible and a FAAB bid is real money, so the cycle does not
                fire claims until that write is confirmed against a live response
@@ -93,22 +98,46 @@ def _apply_lineup(session, league, settings, user, mine) -> dict:
     week = _week(settings)
     # Scored for THIS week, so an OUT or bye player is actually benched.
     roster = automode.weekly_roster(session, league, engine, week, my_ids)
-    moves = automode.lineup_moves(
-        roster, engine.shape, automode.current_slots_by_id(mine)
+    current = automode.current_slots_by_id(mine)
+    # Stash the hurt, leave IR alone, and never move someone we cannot move.
+    ir = automode.ir_plan_for(
+        roster, current, league,
+        ir_return=automode.resolve_ir_return(user_config(session, user)),
     )
-    result = lineup_write.set_lineup(
-        season=league.season,
-        league_id=league.espn_league_id,
-        team_id=mine.espn_team_id,
-        swid=settings.espn_swid,
-        espn_s2=settings.espn_s2,
-        scoring_period_id=week,
-        moves=moves,
-    )
+    moves, stash = automode.lineup_and_ir_moves(roster, engine.shape, current, ir)
+    if ir.blocked:
+        # ESPN blocks every other roster move until a healed player leaves IR, so
+        # this is worth saying out loud rather than leaving the user to wonder why
+        # their waivers stopped working.
+        _log(session, user, "lineup", "needs_attention", automode.ir_blocked_message(ir))
+
+    def send(batch):
+        return lineup_write.set_lineup(
+            season=league.season,
+            league_id=league.espn_league_id,
+            team_id=mine.espn_team_id,
+            swid=settings.espn_swid,
+            espn_s2=settings.espn_s2,
+            scoring_period_id=week,
+            moves=batch,
+        )
+
+    result = send(moves)
+    # A separate transaction: leagues differ on what tag ESPN will accept in an IR
+    # slot, and a refused stash must not take the week's lineup down with it.
+    stash_result = send(stash) if (result.ok and stash) else None
+    if stash_result is not None and stash_result.ok:
+        moves = moves + stash
     summary = (
         "Lineup already optimal -- no change." if not moves
         else "; ".join(f"{m.name} {m.from_slot}->{m.to_slot}" for m in moves)
     )
+    if stash_result is not None and not stash_result.ok:
+        _log(session, user, "lineup", "needs_attention",
+             f"ESPN refused the IR move for "
+             f"{', '.join(name for _, name in ir.to_ir)} "
+             f"(HTTP {stash_result.status_code}). Your league may only allow a true "
+             f"IR designation. The lineup itself was set.")
     statusname = "applied" if result.ok else "rejected"
     _log(session, user, "lineup", statusname, f"HTTP {result.status_code}: {summary}")
     log.info(

@@ -36,6 +36,10 @@ function Toggle({
   )
 }
 
+function IrNames({ rows }: { rows: { espn_player_id: number; name: string }[] }) {
+  return <>{rows.map((r) => r.name).join(', ')}</>
+}
+
 export default function Auto() {
   const status = useAsync<AutoModeStatus>(() => api.autoModeStatus(), [])
   const [busy, setBusy] = useState(false)
@@ -65,7 +69,7 @@ export default function Auto() {
     }
   }
 
-  async function save(patch: Record<string, boolean | number>) {
+  async function save(patch: Record<string, boolean | number | string>) {
     setBusy(true)
     setErr(null)
     try {
@@ -146,6 +150,41 @@ export default function Auto() {
               onClick={() => save({ auto_waivers: !s.tiers.waivers })} />
             <Toggle label="Trades" on={s.tiers.trades} disabled={busy}
               onClick={() => save({ auto_trades: !s.tiers.trades })} />
+          </div>
+        )}
+
+        {/* Injured reserve: what to do when a healed player has to leave IR and
+            there is no room for him. Dropping is irreversible, so the user picks. */}
+        {canOptIn && (
+          <div style={{ marginTop: 12 }}>
+            <div className="small" style={{ fontWeight: 650 }}>
+              When a player heals and your bench is full
+            </div>
+            <div className="tiny faint" style={{ marginBottom: 6 }}>
+              ESPN makes you take a healed player off IR, and it blocks every other
+              roster move until you do. If there's no open spot, something has to give.
+            </div>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <button
+                className={`btn sm ${s.ir_return === 'alert' ? 'primary' : ''}`}
+                disabled={busy}
+                onClick={() => save({ auto_ir_return: 'alert' })}
+              >
+                Just tell me
+              </button>
+              <button
+                className={`btn sm ${s.ir_return === 'drop' ? 'primary' : ''}`}
+                disabled={busy}
+                onClick={() => save({ auto_ir_return: 'drop' })}
+              >
+                Name the drop for me
+              </button>
+            </div>
+            <div className="tiny faint" style={{ marginTop: 6 }}>
+              {s.ir_return === 'drop'
+                ? 'Auto Mode will name your lowest-value bench player as the drop — you still confirm it. Auto Mode never drops a player on its own.'
+                : 'Auto Mode will flag it in the activity log and change nothing.'}
+            </div>
           </div>
         )}
 
@@ -246,6 +285,14 @@ export default function Auto() {
                         {lineupResult.moves.map((m) => `${m.name}: ${m.from_slot}→${m.to_slot}`).join(', ')}
                       </div>
                     )}
+                    {/* A jammed IR slot is the one thing that silently stops every
+                        other move, so say it here too. */}
+                    {(lineupResult.ir?.blocked.length ?? 0) > 0 && (
+                      <div className="tiny" style={{ marginTop: 4 }}>
+                        Still on IR and healed: <IrNames rows={lineupResult.ir!.blocked} /> —
+                        ESPN blocks other roster moves until that's resolved.
+                      </div>
+                    )}
                     {/* Show ESPN's raw response only when there is something to act on
                         (a rejection); a clean apply doesn't need the JSON. */}
                     {!lineupResult.ok && (
@@ -253,6 +300,49 @@ export default function Auto() {
                         {lineupResult.response}
                       </div>
                     )}
+                  </Banner>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Injured reserve */}
+          {s.plan.ir && s.plan.ir.ir_slots > 0 &&
+            (s.plan.ir.to_ir.length > 0 ||
+              s.plan.ir.from_ir.length > 0 ||
+              s.plan.ir.blocked.length > 0) && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 650 }}>
+                Injured reserve{' '}
+                <span className="tiny faint">
+                  ({s.plan.ir.ir_free} of {s.plan.ir.ir_slots} free)
+                </span>
+              </div>
+              {s.plan.ir.to_ir.length > 0 && (
+                <div className="small muted">
+                  Stash on IR: <IrNames rows={s.plan.ir.to_ir} /> — frees a roster
+                  spot while they're out. Applying your lineup does this.
+                </div>
+              )}
+              {s.plan.ir.from_ir.length > 0 && (
+                <div className="small muted">
+                  Back to the bench: <IrNames rows={s.plan.ir.from_ir} /> — healed,
+                  and you have room.
+                </div>
+              )}
+              {s.plan.ir.blocked.length > 0 && (
+                <div style={{ marginTop: 6 }}>
+                  <Banner kind="error">
+                    <strong>
+                      Healed on IR with a full bench: <IrNames rows={s.plan.ir.blocked} />
+                    </strong>
+                    <div className="tiny" style={{ marginTop: 4 }}>
+                      ESPN blocks all of your other roster moves — waivers included —
+                      until one of them is off IR. Open a spot or drop someone.
+                      {s.plan.ir.drop_candidate && (
+                        <> Cheapest drop: <strong>{s.plan.ir.drop_candidate.name}</strong>.</>
+                      )}
+                    </div>
                   </Banner>
                 </div>
               )}
