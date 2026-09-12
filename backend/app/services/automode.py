@@ -90,17 +90,36 @@ def current_slots_by_id(team) -> dict[int, str]:
     return out
 
 
-def lineup_moves(engine, my_ids, current_slots):
+def weekly_roster(session, league, engine, week: int, my_ids: set[int]):
+    """My roster scored for THIS week, not for the season.
+
+    This is the difference between a lineup that reads the week and one that does
+    not. `engine.roster_players` carries the SEASON projection, so an elite player
+    who is OUT or on bye this week still ranks first and the "optimal" lineup
+    keeps starting him -- which is exactly why Auto Mode kept reporting "already
+    optimal" while the Week screen correctly benched an OUT starter. Scoring
+    through build_weekly_players applies the injury and bye rules for the week,
+    and as_roster_player(use_week=True) carries those weekly points through.
+    """
+    from . import season as season_service
+
+    weekly = season_service.build_weekly_players(
+        session, league, engine, week, espn_player_ids=my_ids
+    )
+    return [p.as_roster_player(use_week=True) for p in weekly]
+
+
+def lineup_moves(roster, shape, current_slots):
     """The slot changes to turn a team's current lineup into its optimal one.
 
-    Shared by the on-demand apply endpoint and the autonomous cycle so both diff
-    the optimal lineup against ESPN's real slots identically. Only players whose
-    slot changes produce a move.
+    `roster` must already be scored for the week being set (see `weekly_roster`),
+    so injuries and byes are reflected. Shared by the on-demand apply endpoint and
+    the autonomous cycle so both diff identically. Only players whose slot changes
+    produce a move.
     """
     from ..espn import lineup_write
 
-    roster = engine.roster_players(my_ids)
-    optimal = build_optimal_lineup(roster, engine.shape)
+    optimal = build_optimal_lineup(roster, shape)
     names = {p.espn_player_id: p.name for p in roster}
     optimal_slot_by_id = {
         s.player.espn_player_id: s.slot for s in optimal.starters if s.player
@@ -125,12 +144,15 @@ def _current_starter_ids(team) -> set[int]:
     return out
 
 
-def build_lineup_plan(engine, my_ids: set[int], current_starters: set[int]) -> dict:
-    """The optimal legal lineup vs what's currently started -- the moves to make."""
-    roster = engine.roster_players(my_ids)
+def build_lineup_plan(roster, shape, current_starters: set[int]) -> dict:
+    """The optimal legal lineup vs what's currently started -- the moves to make.
+
+    `roster` is scored for the week (see `weekly_roster`), so the plan shown on the
+    Auto tab matches the Week screen rather than ranking on season value.
+    """
     if not roster:
         return {"changes": [], "gain": 0.0, "note": "No roster yet."}
-    lineup = build_optimal_lineup(roster, engine.shape)
+    lineup = build_optimal_lineup(roster, shape)
     optimal = {s.player.espn_player_id for s in lineup.starters if s.player}
     by_id = {p.espn_player_id: p for p in roster}
 
@@ -185,7 +207,11 @@ def build_plan(
     mine = season_service.my_team(session, league)
     my_ids = season_service.my_roster_ids(session, league)
     if tiers.lineup and mine is not None and my_ids:
-        plan.lineup = build_lineup_plan(engine, my_ids, _current_starter_ids(mine))
+        plan.lineup = build_lineup_plan(
+            weekly_roster(session, league, engine, week, my_ids),
+            engine.shape,
+            _current_starter_ids(mine),
+        )
         plan.lineup["write_enabled"] = LINEUP_WRITE_ENABLED
         # Lineup writing is live and user-triggered: the plan shows the moves and
         # the Apply button on the Auto tab performs the real ESPN write.

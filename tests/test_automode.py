@@ -98,3 +98,66 @@ def test_admin_switch_and_capability_are_owner_only(drafted_league):
 
     assert drafted_league.post("/api/admin/auto-mode", json={"enabled": False}).status_code == 403
     assert drafted_league.get("/api/admin/auto-mode").status_code == 403
+
+
+class TestTheLineupReadsTheWeek:
+    """Reported from real use: an OUT starter (Brock Bowers) stayed in the lineup
+    and Auto Mode logged "Lineup already optimal -- no change" every cycle, while
+    the Week screen correctly benched him.
+
+    Cause: Auto Mode optimised on `engine.roster_players`, which carries the
+    SEASON projection. An elite player who is OUT this week still ranked first, so
+    the "optimal" lineup matched ESPN and the diff was empty. The lineup must be
+    scored for the week being set.
+    """
+
+    def test_an_out_star_is_benched_not_started(self):
+        from app.engine.roster import build_optimal_lineup
+        from app.engine.league_shape import LeagueShape
+        from app.engine.weekly import WeeklyPlayer
+
+        shape = LeagueShape(team_count=10, dedicated={"TE": 1}, bench_slots=1)
+
+        # A stud TE who is OUT this week, and a modest healthy TE.
+        stud = WeeklyPlayer(
+            espn_player_id=1, name="Bowers", position="TE",
+            week_points=0.0, season_points=300.0, injury_status="OUT", week=1,
+        )
+        backup = WeeklyPlayer(
+            espn_player_id=2, name="Backup TE", position="TE",
+            week_points=8.0, season_points=80.0, week=1,
+        )
+
+        # Season basis (the bug): the OUT stud wins the TE slot.
+        season_lineup = build_optimal_lineup(
+            [p.as_roster_player(use_week=False) for p in (stud, backup)], shape
+        )
+        assert season_lineup.starters[0].player.name == "Bowers"
+
+        # Week basis (the fix): the healthy player starts instead.
+        week_lineup = build_optimal_lineup(
+            [p.as_roster_player(use_week=True) for p in (stud, backup)], shape
+        )
+        assert week_lineup.starters[0].player.name == "Backup TE"
+
+    def test_lineup_moves_benches_the_out_player(self):
+        from app.engine.league_shape import LeagueShape
+        from app.engine.weekly import WeeklyPlayer
+        from app.services import automode
+
+        shape = LeagueShape(team_count=10, dedicated={"TE": 1}, bench_slots=1)
+        stud = WeeklyPlayer(
+            espn_player_id=1, name="Bowers", position="TE",
+            week_points=0.0, season_points=300.0, injury_status="OUT", week=1,
+        )
+        backup = WeeklyPlayer(
+            espn_player_id=2, name="Backup TE", position="TE",
+            week_points=8.0, season_points=80.0, week=1,
+        )
+        roster = [p.as_roster_player(use_week=True) for p in (stud, backup)]
+
+        # ESPN currently has the OUT stud starting and the healthy TE benched.
+        moves = automode.lineup_moves(roster, shape, {1: "TE", 2: "BE"})
+        by_id = {m.espn_player_id: m for m in moves}
+        assert by_id[1].to_slot == "BE", "the OUT player must be benched"
+        assert by_id[2].to_slot == "TE", "the healthy player must start"

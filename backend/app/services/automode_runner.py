@@ -90,14 +90,19 @@ def _apply_lineup(session, league, settings, user, mine) -> dict:
         _log(session, user, "lineup", "skipped", "No roster found for your team.")
         return {"tier": "lineup", "status": "skipped", "detail": "no roster"}
 
-    moves = automode.lineup_moves(engine, my_ids, automode.current_slots_by_id(mine))
+    week = _week(settings)
+    # Scored for THIS week, so an OUT or bye player is actually benched.
+    roster = automode.weekly_roster(session, league, engine, week, my_ids)
+    moves = automode.lineup_moves(
+        roster, engine.shape, automode.current_slots_by_id(mine)
+    )
     result = lineup_write.set_lineup(
         season=league.season,
         league_id=league.espn_league_id,
         team_id=mine.espn_team_id,
         swid=settings.espn_swid,
         espn_s2=settings.espn_s2,
-        scoring_period_id=_week(settings),
+        scoring_period_id=week,
         moves=moves,
     )
     summary = (

@@ -973,9 +973,12 @@ def lineup_apply(
 
     from ..services import automode
 
-    moves = automode.lineup_moves(engine, my_ids, automode.current_slots_by_id(mine))
-
     scoring_period_id = _resolve_week(payload.week, settings)
+    # Scored for THIS week, so an OUT or bye player is actually benched.
+    roster = automode.weekly_roster(session, league, engine, scoring_period_id, my_ids)
+    moves = automode.lineup_moves(
+        roster, engine.shape, automode.current_slots_by_id(mine)
+    )
     result = lineup_write.set_lineup(
         season=league.season,
         league_id=league.espn_league_id,
