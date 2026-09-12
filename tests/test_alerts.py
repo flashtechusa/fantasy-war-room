@@ -22,6 +22,7 @@ def player(
     week_points: float = 12.0,
     injury_status: str = "ACTIVE",
     bye_week: int | None = None,
+    week: int | None = None,
 ) -> WeeklyPlayer:
     return WeeklyPlayer(
         espn_player_id=pid,
@@ -31,6 +32,7 @@ def player(
         season_points=week_points * 17,
         injury_status=injury_status,
         bye_week=bye_week,
+        week=week,
     )
 
 
@@ -59,11 +61,26 @@ class TestLineupProblems:
         assert "Bijan" in alerts[0].body
 
     def test_a_starter_on_bye_is_critical(self):
-        # week_points of 0 with a bye week set is what `on_bye` keys off.
-        benched = player(2, "Kupp", position="WR", week_points=0.0, bye_week=5)
+        # Genuinely on bye: the week being evaluated IS his bye week.
+        benched = player(2, "Kupp", position="WR", week_points=0.0, bye_week=5, week=5)
         alerts = detect_lineup_problems(result(SlotDecision(slot="WR1", player=benched)))
         assert len(alerts) == 1
         assert "on bye" in alerts[0].body
+
+    def test_an_out_player_is_not_reported_as_on_bye(self):
+        """Reported from real use: Brock Bowers was OUT, and the app said he was
+        "on bye in week 1". `on_bye` keyed off a zero projection, which is equally
+        true of an OUT player, and that branch shadowed the injury reason."""
+        hurt = player(
+            3, "Bowers", position="TE", week_points=0.0,
+            injury_status="OUT", bye_week=9, week=1,
+        )
+        alerts = detect_lineup_problems(
+            result(SlotDecision(slot="TE", player=hurt), week=1)
+        )
+        assert len(alerts) == 1
+        assert "on bye" not in alerts[0].body
+        assert "Out" in alerts[0].body
 
     def test_a_healthy_lineup_says_nothing(self):
         alerts = detect_lineup_problems(

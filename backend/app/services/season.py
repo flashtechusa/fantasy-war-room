@@ -145,6 +145,8 @@ def build_weekly_players(
                 name=player.name,
                 position=player.position,
                 pro_team=player.pro_team,
+                # Carried so on_bye compares against the week actually asked for.
+                week=week,
                 week_points=points,
                 # Rest-of-season value, not the full-season total: a trade in
                 # week 10 shouldn't be judged on points already scored.

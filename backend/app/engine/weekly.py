@@ -42,6 +42,9 @@ class WeeklyPlayer:
     season_points: float = 0.0
     vor: float = 0.0
     bye_week: int | None = None
+    #: The week this player is being evaluated for, so `on_bye` can compare
+    #: the two rather than inferring a bye from a zero projection.
+    week: int | None = None
     injury_status: str = "ACTIVE"
     percent_owned: float = 0.0
     availability: str = ""
@@ -51,7 +54,18 @@ class WeeklyPlayer:
 
     @property
     def on_bye(self) -> bool:
-        return self.bye_week is not None and self.week_points == 0.0
+        """True only in the player's actual bye week.
+
+        This used to be "has a bye week somewhere and projects zero", which is
+        equally true of every OUT/IR/suspended player -- their projection is
+        zeroed too. So an injured player was reported as on bye, and because the
+        bye branch is checked first it shadowed the injury warning entirely.
+        """
+        return (
+            self.bye_week is not None
+            and self.week is not None
+            and self.bye_week == self.week
+        )
 
     def as_roster_player(self, use_week: bool = True) -> RosterPlayer:
         return RosterPlayer(
@@ -135,10 +149,13 @@ def optimise_lineup(
             decision.close_call = abs(decision.margin) < CLOSE_CALL_POINTS
 
         status = (weekly.injury_status or "").upper()
-        if weekly.on_bye:
-            decision.warning = f"{weekly.name} is on bye in week {week}"
-        elif status in BENCH_WARNING_STATUSES:
+        # Compare against the week actually being optimised rather than the
+        # player's own copy, and check the injury first: an OUT player projects
+        # zero too, and reporting him as "on bye" hid the real reason.
+        if status in BENCH_WARNING_STATUSES:
             decision.warning = f"{weekly.name} is listed {status.title()}"
+        elif weekly.bye_week is not None and weekly.bye_week == week:
+            decision.warning = f"{weekly.name} is on bye in week {week}"
 
         if decision.warning:
             result.warnings.append(decision.warning)
