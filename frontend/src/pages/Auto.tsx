@@ -10,7 +10,7 @@
 
 import { useState } from 'react'
 import { api, type AutoModeStatus, type LineupApplyResult } from '../api'
-import { Banner, Card, Loading } from '../components'
+import { Banner, Card, EspnSyncLine, Loading } from '../components'
 import { useAsync } from '../useAsync'
 
 function Toggle({
@@ -120,6 +120,10 @@ export default function Auto() {
           working the waiver wire, and surfacing trades. It's <strong>off by
           default</strong> and needs three things lined up: the league admin's
           master switch, permission on your account, and your own opt-in.
+        </div>
+
+        <div style={{ marginBottom: 10 }}>
+          <EspnSyncLine sync={s.espn_sync} onSynced={status.reload} />
         </div>
 
         <div className="tiny faint" style={{ marginBottom: 10 }}>

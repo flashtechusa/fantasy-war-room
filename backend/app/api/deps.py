@@ -15,7 +15,7 @@ from ..models import DraftSession, League
 from ..services import draft as draft_service
 from ..services.board import LeagueNotImported, build_board, build_engine
 from ..services import season as season_service
-from ..services.importer import get_active_league
+from ..services.importer import get_active_league, maybe_refresh_rosters
 from ..services.runtime_config import settings_for_user
 from .routes_auth import current_user
 
@@ -48,6 +48,14 @@ def league_dep(
                 "to explore with synthetic data)."
             ),
         )
+    # Reported from real use: a move made in the ESPN app (a start/sit, an IR
+    # stash) did not show up here. Our roster slots only refreshed as a side
+    # effect of the 90-minute player-pool sweep, so the app could show a lineup
+    # ESPN had already changed -- and then compute moves against it. Refreshing
+    # here rather than inside each route matters: this runs *before* engine_dep,
+    # so the board and the roster a screen renders come from the same pull.
+    if maybe_refresh_rosters(session, league, settings):
+        league = get_active_league(session, settings) or league
     return league
 
 

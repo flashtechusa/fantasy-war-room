@@ -407,8 +407,15 @@ export interface WeekPlayer {
   week_projection_is_real: boolean
 }
 
+/** When our copy of the ESPN roster was last pulled. */
+export interface EspnSync {
+  synced_at: string
+  age_seconds: number | null
+}
+
 export interface LineupResponse {
   week: number
+  espn_sync?: EspnSync
   projected_points: number
   points_vs_naive: number
   starters: {
@@ -432,6 +439,7 @@ export interface LineupResponse {
 
 export interface WaiverResponse {
   week: number
+  espn_sync?: EspnSync
   roster_size: number
   roster_is_full: boolean
   free_agents_considered: number
@@ -544,6 +552,7 @@ export interface AutoModeStatus {
   tiers: { lineup: boolean; waivers: boolean; trades: boolean }
   faab_max: number
   ir_return: 'alert' | 'drop'
+  espn_sync?: EspnSync
   plan: {
     active: boolean
     dry_run: boolean
@@ -1110,6 +1119,13 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ api_key, import_now }),
     }),
+
+  // Pull rosters + league settings from ESPN right now, ignoring the timer --
+  // for a move you just made in the ESPN app.
+  syncFromEspn: () =>
+    request<{ ok: boolean; note: string; synced_at: string; age_seconds: number | null }>(
+      '/api/season/sync', { method: 'POST' },
+    ),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),

@@ -1,10 +1,64 @@
 /** Shared presentational pieces. */
 
+import { useState } from 'react'
 import type { ReactNode } from 'react'
-import type { PlayerRow, ScoreComponent } from './api'
+import { api } from './api'
+import type { EspnSync, PlayerRow, ScoreComponent } from './api'
 
 export function Pos({ position }: { position: string }) {
   return <span className={`pos ${position}`}>{position}</span>
+}
+
+function ago(seconds: number | null): string {
+  if (seconds === null) return 'unknown'
+  if (seconds < 60) return `${Math.max(seconds, 0)}s ago`
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`
+  return `${Math.round(seconds / 3600)}h ago`
+}
+
+/**
+ * "Where these numbers came from", with a way to force it.
+ *
+ * Reported from real use: a move made in the ESPN app didn't show up here, and
+ * there was no way to tell whether the app was stale or wrong. The screens now
+ * re-pull the roster themselves when it's old, and this says when that last
+ * happened -- plus a button, because waiting on a timer for a move you just made
+ * is not an answer.
+ */
+export function EspnSyncLine({
+  sync,
+  onSynced,
+}: {
+  sync?: EspnSync
+  onSynced: () => void
+}) {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  if (!sync) return null
+
+  async function syncNow() {
+    setBusy(true)
+    setErr(null)
+    try {
+      const result = await api.syncFromEspn()
+      if (!result.ok && result.note) setErr(result.note)
+      onSynced()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="tiny faint row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span>ESPN roster synced {ago(sync.age_seconds)}</span>
+      <button className="btn sm" disabled={busy} onClick={syncNow}>
+        {busy ? 'Syncing…' : 'Sync now'}
+      </button>
+      {err && <span style={{ color: 'var(--bad)' }}>{err}</span>}
+    </div>
+  )
 }
 
 export function Loading({ what = 'data' }: { what?: string }) {

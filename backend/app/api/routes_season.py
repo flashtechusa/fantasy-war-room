@@ -210,6 +210,7 @@ def start_sit(
         ],
         "unfilled_slots": result.unfilled_slots,
         "estimated_projections": estimated,
+        "espn_sync": _sync_stamp(session, league),
     }
 
 
@@ -315,6 +316,7 @@ def waivers(
 
     return {
         "week": week,
+        "espn_sync": _sync_stamp(session, league),
         "roster_size": len(roster),
         "roster_is_full": len(roster) >= shape.roster_size,
         "free_agents_considered": len(free_agents),
@@ -935,6 +937,41 @@ def _auto_run(session, *, user, tier, statusname, summary):
     session.commit()
 
 
+def _sync_stamp(session, league) -> dict:
+    """When our roster slots last came from ESPN -- shown on the screens that use them."""
+    from ..services import importer
+
+    age = importer.roster_age_seconds(league)
+    return {"synced_at": league.imported_at, "age_seconds": None if age is None else round(age)}
+
+
+@router.post("/sync")
+def sync_from_espn(
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """Pull rosters and league settings from ESPN right now, ignoring the timer.
+
+    The screens refresh themselves when our copy is old enough to be wrong, but a
+    move you just made in the ESPN app should not need a wait -- this is that
+    button. Cheap: teams and settings, not the whole player pool.
+    """
+    from ..services import importer
+
+    ok = importer.maybe_refresh_rosters(session, league, settings, force=True)
+    league = importer.get_active_league(session, settings) or league
+    return {
+        "ok": ok,
+        "note": (
+            "" if ok else
+            "Nothing to sync -- connect ESPN first (or ESPN did not answer; your "
+            "stored roster is still in place)."
+        ),
+        **_sync_stamp(session, league),
+    }
+
+
 def _refresh_rosters(session, settings) -> bool:
     """Refresh team rosters from ESPN before a write (see importer.refresh_rosters)."""
     from ..services import importer
@@ -1048,6 +1085,12 @@ def lineup_apply(
         getattr(user, "username", "?"), mine.espn_team_id, result.ok,
         result.status_code, len(moves),
     )
+    if result.ok and moves:
+        # Pull ESPN's new truth immediately. Without this the screen that reloads
+        # next still shows the slots from before the write -- the app and ESPN
+        # visibly disagreeing about a move the app just made.
+        _refresh_rosters(session, settings)
+
     return {
         "ok": result.ok,
         "status_code": result.status_code,
@@ -1280,6 +1323,11 @@ def waiver_apply(
         getattr(user, "username", "?"), kind, payload.add_id, payload.drop_id,
         result.ok, result.status_code,
     )
+    if result.ok:
+        # An accepted add/drop changes the roster we render everywhere; pull it now
+        # so the next screen is not still showing the player we just dropped.
+        _refresh_rosters(session, settings)
+
     return {
         "ok": result.ok,
         "status_code": result.status_code,
@@ -1364,6 +1412,7 @@ def automode_status(
         },
         "faab_max": int(getattr(config, "auto_faab_max", 0) or 0) if config else 0,
         "ir_return": automode.resolve_ir_return(config),
+        "espn_sync": _sync_stamp(session, league),
         "plan": _auto_plan_payload(plan),
         "activity": [
             {"at": r.created_at, "tier": r.tier, "status": r.status, "summary": r.summary}

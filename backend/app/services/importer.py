@@ -9,6 +9,7 @@ goes down between your import and your draft.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -96,6 +97,60 @@ def data_age_seconds(session: Session, league: League) -> float | None:
     if latest.tzinfo is None:
         latest = latest.replace(tzinfo=timezone.utc)
     return (utcnow() - latest).total_seconds()
+
+
+def roster_age_seconds(league: League) -> float | None:
+    """How long since we last pulled team rosters (and league settings) from ESPN.
+
+    `imported_at` is stamped by every import, including the cheap teams-only
+    refresh, so it is exactly "when did our roster slots last come from ESPN".
+    """
+    stamp = getattr(league, "imported_at", None)
+    if stamp is None:
+        return None
+    if stamp.tzinfo is None:      # SQLite hands back naive datetimes; assume UTC.
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (utcnow() - stamp).total_seconds()
+
+
+#: Rosters are stale the moment anyone touches the ESPN app, and a slot move there
+#: does not age the player pool -- so roster freshness gets its own, much shorter
+#: clock than `data_age_seconds`. Short enough that a move made on ESPN shows up on
+#: the next screen you open; long enough that browsing does not hammer ESPN.
+ROSTER_STALE_AFTER = 90.0
+#: Never re-pull more often than this per league, however many requests arrive.
+ROSTER_REFRESH_MIN_INTERVAL = 60.0
+_last_roster_refresh: dict[int, float] = {}
+
+
+def maybe_refresh_rosters(
+    session: Session, league: League, settings: Settings, *, force: bool = False
+) -> bool:
+    """Re-pull rosters from ESPN when ours are old enough to be wrong.
+
+    This is what keeps the app honest about moves made *outside* it: start/sit in
+    the ESPN app, an IR stash, a waiver that processed overnight. Without it our
+    stored slots only refreshed as a side effect of the 90-minute player-pool
+    sweep, so the app could show a lineup ESPN had already changed.
+
+    Best-effort by design: any failure leaves the stored roster in place and the
+    screen still renders.
+    """
+    try:
+        if not (settings.espn_swid and settings.espn_s2):
+            return False      # Demo or not connected -- nothing to pull.
+        now = time.monotonic()
+        if not force:
+            if now - _last_roster_refresh.get(league.id, 0.0) < ROSTER_REFRESH_MIN_INTERVAL:
+                return False
+            age = roster_age_seconds(league)
+            if age is not None and age < ROSTER_STALE_AFTER:
+                return False
+        _last_roster_refresh[league.id] = now
+        return refresh_rosters(session, settings)
+    except Exception:      # noqa: BLE001 - freshness must never break a screen
+        log.warning("Skipping roster refresh (non-fatal).")
+        return False
 
 
 def refresh_rosters(session: Session, settings: Settings) -> bool:

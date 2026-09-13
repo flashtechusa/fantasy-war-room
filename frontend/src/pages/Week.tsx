@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { api } from '../api'
-import { Banner, Card, InjuryTag, Loading, Pos } from '../components'
+import { Banner, Card, EspnSyncLine, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
 export default function Week() {
@@ -53,6 +53,9 @@ export default function Week() {
               ))}
             </select>
           </label>
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <EspnSyncLine sync={data.espn_sync} onSynced={lineup.reload} />
         </div>
       </Card>
 

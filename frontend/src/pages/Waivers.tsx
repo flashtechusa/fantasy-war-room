@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { api, type WaiverApplyResult } from '../api'
-import { Banner, Card, InjuryTag, Loading, Pos } from '../components'
+import { Banner, Card, EspnSyncLine, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
 const VERDICT_COLOR: Record<string, string> = {
@@ -142,6 +142,9 @@ export default function Waivers() {
             <div className="tiny faint">
               Roster {data.roster_size} · {data.roster_is_full ? 'full' : 'has space'}
               {data.uses_faab && ` · $${data.faab_budget} FAAB`}
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <EspnSyncLine sync={data.espn_sync} onSynced={waivers.reload} />
             </div>
           </div>
           <label style={{ width: 110 }}>
