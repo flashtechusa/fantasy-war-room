@@ -306,18 +306,37 @@ export default function Auto() {
             </div>
           )}
 
-          {/* Injured reserve */}
-          {s.plan.ir && s.plan.ir.ir_slots > 0 &&
-            (s.plan.ir.to_ir.length > 0 ||
-              s.plan.ir.from_ir.length > 0 ||
-              s.plan.ir.blocked.length > 0) && (
+          {/* Injured reserve. Always shown when we can see the roster -- a hidden
+              panel gave no way to tell "nothing to stash" from "IR never imported". */}
+          {s.plan.ir && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontWeight: 650 }}>
                 Injured reserve{' '}
                 <span className="tiny faint">
-                  ({s.plan.ir.ir_free} of {s.plan.ir.ir_slots} free)
+                  {s.plan.ir.ir_slots === 0
+                    ? '(no IR spots in this league)'
+                    : `(${s.plan.ir.ir_slots} spot${s.plan.ir.ir_slots === 1 ? '' : 's'}, ${s.plan.ir.ir_free} open)`}
                 </span>
               </div>
+              {s.plan.ir.ir_slots === 0 && (
+                <div className="small muted">
+                  Your imported league settings say this league has no IR spots, so
+                  Auto Mode won't use them. If that's wrong, hit{' '}
+                  <strong>Re-import league</strong> on the League screen — IR slot
+                  counts come straight from ESPN's league settings.
+                </div>
+              )}
+              {s.plan.ir.ir_slots > 0 &&
+                s.plan.ir.to_ir.length === 0 &&
+                s.plan.ir.from_ir.length === 0 &&
+                s.plan.ir.blocked.length === 0 && (
+                <div className="small muted">
+                  Nothing to move. Auto Mode parks anyone tagged{' '}
+                  <strong>Out</strong> here — which frees an active roster spot —
+                  and tells you when one of them heals. A Questionable or Doubtful
+                  tag isn't enough: ESPN only accepts Out or IR in an IR slot.
+                </div>
+              )}
               {s.plan.ir.to_ir.length > 0 && (
                 <div className="small muted">
                   Stash on IR: <IrNames rows={s.plan.ir.to_ir} /> — frees a roster
