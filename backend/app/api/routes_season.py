@@ -159,6 +159,20 @@ def start_sit(
     roster = season_service.build_weekly_players(
         session, league, engine, week, espn_player_ids=roster_ids
     )
+
+    # Injured reserve is part of the roster picture, so the Week screen shows it
+    # the way it shows the bench. Players parked there are NOT available to start,
+    # so they come out of the optimiser entirely rather than being ranked and then
+    # benched -- otherwise a stashed player could be handed a starting slot we are
+    # not allowed to put him in.
+    from ..services import automode
+
+    mine = season_service.my_team(session, league)
+    current_slots = automode.current_slots_by_id(mine) if mine is not None else {}
+    ir_ids = {pid for pid, slot in current_slots.items() if (slot or "").upper() == "IR"}
+    on_ir = [p for p in roster if p.espn_player_id in ir_ids]
+    roster = [p for p in roster if p.espn_player_id not in ir_ids]
+
     result = optimise_lineup(roster, league_shape(league), week)
 
     estimated = [p.name for p in roster if not p.week_projection_is_real]
@@ -210,6 +224,18 @@ def start_sit(
         ],
         "unfilled_slots": result.unfilled_slots,
         "estimated_projections": estimated,
+        "ir": {
+            "slots": int(getattr(league, "ir_slots", 0) or 0),
+            "used": len(on_ir),
+            "open": max(int(getattr(league, "ir_slots", 0) or 0) - len(on_ir), 0),
+            "players": [_serialize_player(p) for p in on_ir],
+            # Healed, so ESPN will not let him stay -- and blocks every other
+            # roster move until he is off IR.
+            "must_return": [
+                _serialize_player(p) for p in on_ir
+                if not automode.ir_eligible(p.injury_status)
+            ],
+        },
         "espn_sync": _sync_stamp(session, league),
     }
 

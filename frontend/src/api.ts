@@ -413,9 +413,19 @@ export interface EspnSync {
   age_seconds: number | null
 }
 
+/** Injured reserve as it stands on ESPN: who is parked there, and how much room. */
+export interface IrSection {
+  slots: number
+  used: number
+  open: number
+  players: WeekPlayer[]
+  must_return: WeekPlayer[]
+}
+
 export interface LineupResponse {
   week: number
   espn_sync?: EspnSync
+  ir?: IrSection
   projected_points: number
   points_vs_naive: number
   starters: {

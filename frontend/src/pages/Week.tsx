@@ -182,6 +182,69 @@ export default function Week() {
         )}
       </Card>
 
+      {/* Injured reserve, shown like the bench: it is part of your roster, it is
+          where a hurt player frees up an active spot, and a healed player left
+          here blocks every other roster move you try to make. */}
+      {data.ir && data.ir.slots > 0 && (
+        <Card title={`Injured reserve (${data.ir.used}/${data.ir.slots})`}>
+          {data.ir.must_return.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <Banner kind="error">
+                <strong>
+                  {data.ir.must_return.map((p) => p.name).join(', ')} no longer
+                  {data.ir.must_return.length === 1 ? ' qualifies' : ' qualify'} for IR.
+                </strong>
+                <div className="tiny" style={{ marginTop: 4 }}>
+                  ESPN blocks all of your other roster moves — waivers included —
+                  until they're off IR.
+                </div>
+              </Banner>
+            </div>
+          )}
+          {data.ir.players.length === 0 ? (
+            <div className="small faint">
+              {data.ir.slots === 1 ? 'Your IR spot is empty' : `All ${data.ir.slots} IR spots are empty`}.
+              A player tagged Out can sit here without counting against your roster
+              limit — that's a free spot for a pickup.
+            </div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th className="num">Proj</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.ir.players.map((player) => (
+                    <tr key={player.espn_player_id}>
+                      <td>
+                        {player.name}
+                        <InjuryTag status={player.injury_status} />
+                        {player.on_bye && <span className="faint tiny"> · BYE</span>}
+                      </td>
+                      <td>
+                        <Pos position={player.position} />
+                      </td>
+                      <td className="num">{player.week_points.toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div className="tiny faint" style={{ marginTop: 8 }}>
+            {data.ir.open > 0
+              ? `${data.ir.open} IR spot${data.ir.open === 1 ? '' : 's'} open. `
+              : 'No IR room left. '}
+            They don't count against your active roster, and they're not eligible to
+            start.
+          </div>
+        </Card>
+      )}
+
       {data.estimated_projections.length > 0 && (
         <Card title="Estimated numbers">
           <div className="small muted">

@@ -108,3 +108,45 @@ def test_sync_now_is_honest_when_there_is_nothing_to_sync(drafted_league):
     # claiming a sync it never made.
     body = drafted_league.post("/api/season/sync").json()
     assert body["ok"] is False and body["note"]
+
+
+class TestTheWeekScreenShowsIr:
+    """Asked for directly: the Week tab should show IR spots the way it shows the
+    bench. Two rules come with that -- a player parked on IR is not eligible to
+    start, so he must not be ranked into the lineup, and a healed one left there
+    blocks every other roster move, so the screen has to say so.
+    """
+
+    def test_the_payload_carries_the_ir_section(self, drafted_league):
+        body = drafted_league.get("/api/season/lineup").json()
+        assert "ir" in body
+        ir = body["ir"]
+        assert set(ir) == {"slots", "used", "open", "players", "must_return"}
+        assert ir["open"] == max(ir["slots"] - ir["used"], 0)
+
+    def test_a_player_on_ir_is_never_ranked_into_the_lineup(self, drafted_league):
+        from app.db import session_scope
+        from app.models import League, LeagueTeam
+
+        # Park my highest-projected player on IR behind the app's back, the way a
+        # move in the ESPN app would.
+        with session_scope() as s:
+            league = s.query(League).first()
+            mine = s.query(LeagueTeam).filter(LeagueTeam.league_id == league.id, LeagueTeam.is_mine).first()
+            roster = list(mine.roster or [])
+            assert roster, "fixture should have a roster"
+            stashed = roster[0]["espn_player_id"]
+            roster[0] = {**roster[0], "slot": "IR"}
+            mine.roster = roster
+
+        body = drafted_league.get("/api/season/lineup").json()
+        started = {
+            s["player"]["espn_player_id"] for s in body["starters"] if s["player"]
+        }
+        benched = {p["espn_player_id"] for p in body["bench"]}
+        on_ir = {p["espn_player_id"] for p in body["ir"]["players"]}
+
+        assert stashed in on_ir, "he should show up under injured reserve"
+        assert stashed not in started, "a player on IR is not eligible to start"
+        assert stashed not in benched, "and he is not on the bench either"
+        assert body["ir"]["used"] == 1
