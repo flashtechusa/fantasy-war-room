@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { api, type YahooLeagueOption } from '../api'
+import { api, type ConnectionInfo, type YahooLeagueOption } from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -160,6 +160,186 @@ function EspnConnectionForm({ onSaved }: { onSaved: () => void }) {
 }
 
 /**
+ * Every league this account has connected.
+ *
+ * One person often has two -- an ESPN league and a Yahoo league -- and they
+ * are peers, not a setting to be overwritten. Adding one here does not import
+ * it; it says "this league is mine and here is how to read it", and the import
+ * button below does the rest against whichever is active.
+ */
+function ConnectedLeagues({ onChanged }: { onChanged: () => void }) {
+  const state = useAsync(() => api.connections(), [])
+  const [adding, setAdding] = useState(false)
+  const [platform, setPlatform] = useState<'espn' | 'yahoo'>('espn')
+  const [leagueId, setLeagueId] = useState('')
+  const [season, setSeason] = useState('')
+  const [label, setLabel] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const connections = state.data?.connections ?? []
+  const activeId = state.data?.active_connection_id ?? null
+
+  async function run(action: () => Promise<unknown>, done?: string) {
+    setBusy(true)
+    setNote(null)
+    try {
+      await action()
+      state.reload()
+      onChanged()
+      if (done) setNote({ ok: true, text: done })
+    } catch (error) {
+      setNote({ ok: false, text: (error as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function add() {
+    await run(async () => {
+      await api.addConnection({
+        platform,
+        league_id: leagueId.trim() ? Number(leagueId.trim()) : null,
+        season: season.trim() ? Number(season.trim()) : undefined,
+        label: label.trim(),
+      })
+      setLeagueId('')
+      setLabel('')
+      setAdding(false)
+    }, 'League added. Import it below to pull settings and players.')
+  }
+
+  function remove(connection: ConnectionInfo) {
+    const confirmed = window.confirm(
+      `Disconnect ${connection.label}? Everything imported for it is deleted. ` +
+        'Your league on the platform is untouched.',
+    )
+    if (confirmed) run(() => api.deleteConnection(connection.id), 'Disconnected.')
+  }
+
+  return (
+    <Card title="Connected leagues">
+      {connections.length === 0 && !adding && (
+        <div className="small muted" style={{ marginBottom: 10 }}>
+          No leagues connected yet. Add one to get started — ESPN needs a league id,
+          Yahoo needs a one-time sign-in.
+        </div>
+      )}
+
+      {connections.map((connection) => (
+        <div
+          key={connection.id}
+          className="row between"
+          style={{ gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)' }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div className="small">
+              <strong>{connection.label}</strong>
+              {connection.id === activeId && <span className="pill" style={{ marginLeft: 6 }}>active</span>}
+            </div>
+            <div className="tiny faint">
+              {connection.platform.toUpperCase()} · {connection.season}
+              {connection.platform === 'yahoo' &&
+                (connection.yahoo_connected ? ' · connected' : ' · not connected')}
+              {connection.platform === 'espn' && connection.espn_cookies_set && ' · private'}
+            </div>
+          </div>
+          <div className="row" style={{ gap: 6 }}>
+            {connection.id !== activeId && (
+              <button
+                className="btn sm"
+                disabled={busy}
+                onClick={() => run(() => api.activateConnection(connection.id), 'Switched.')}
+              >
+                Use
+              </button>
+            )}
+            <button className="btn sm" disabled={busy} onClick={() => remove(connection)}>
+              Remove
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {adding ? (
+        <div style={{ marginTop: 10 }}>
+          <label className="tiny faint">PLATFORM</label>
+          <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+            <button
+              className={`btn block ${platform === 'espn' ? 'primary' : ''}`}
+              onClick={() => setPlatform('espn')}
+            >
+              ESPN
+            </button>
+            <button
+              className={`btn block ${platform === 'yahoo' ? 'primary' : ''}`}
+              onClick={() => setPlatform('yahoo')}
+            >
+              Yahoo
+            </button>
+          </div>
+
+          <label className="tiny faint">
+            LEAGUE ID {platform === 'yahoo' && <span className="muted">(or pick it after connecting)</span>}
+          </label>
+          <input
+            type="number"
+            inputMode="numeric"
+            placeholder="123456"
+            value={leagueId}
+            onChange={(e) => setLeagueId(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">SEASON</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            placeholder="2026"
+            value={season}
+            onChange={(e) => setSeason(e.target.value)}
+            style={{ marginBottom: 8 }}
+          />
+          <label className="tiny faint">NAME (OPTIONAL)</label>
+          <input
+            type="text"
+            placeholder="Work league"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            style={{ marginBottom: 10 }}
+          />
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn block" onClick={() => setAdding(false)} disabled={busy}>
+              Cancel
+            </button>
+            <button
+              className="btn primary block"
+              onClick={add}
+              disabled={busy || (platform === 'espn' && !leagueId.trim())}
+            >
+              {busy ? 'Adding…' : 'Add league'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn block" style={{ marginTop: 10 }} onClick={() => setAdding(true)}>
+          Add another league
+        </button>
+      )}
+
+      <div className="tiny faint" style={{ marginTop: 8 }}>
+        Credentials are stored against your account and are never sent back to the browser.
+      </div>
+
+      {note && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+/**
  * Which platform this install reads.
  *
  * Shown above the connection card because picking the wrong one is the single
@@ -218,6 +398,10 @@ function PlatformPicker({ onChanged }: { onChanged: () => void }) {
  */
 function YahooConnectionForm({ onSaved }: { onSaved: () => void }) {
   const status = useAsync(() => api.yahooStatus(), [])
+  // One Yahoo developer app serves the whole installation, so only the
+  // operator sets it. Everyone else just authorises their own account.
+  const me = useAsync(() => api.me(), [])
+  const isAdmin = me.data?.user.is_admin ?? false
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [redirect, setRedirect] = useState('')
@@ -362,7 +546,7 @@ function YahooConnectionForm({ onSaved }: { onSaved: () => void }) {
         )}
       </div>
 
-      {!connected && (
+      {!connected && isAdmin && (
         <>
           <div className="tiny faint" style={{ marginBottom: 8 }}>
             Step 1 — create an app at developer.yahoo.com/apps/create (Fantasy Sports,
@@ -675,7 +859,11 @@ function FantasyProsCard({ onImported }: { onImported: () => void }) {
  * auto-reloading server pick it up.
  */
 function UpdateCard() {
-  const version = useAsync(() => api.version(), [])
+  // Self-update pulls code and restarts the server, so it is operator-only.
+  // Asking a member's browser for it would just render a 403.
+  const me = useAsync(() => api.me(), [])
+  const isAdmin = me.data?.user.is_admin ?? false
+  const version = useAsync(() => (isAdmin ? api.version() : Promise.resolve(null)), [isAdmin])
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
 
@@ -697,6 +885,7 @@ function UpdateCard() {
     }
   }
 
+  if (!isAdmin) return null
   if (version.data && !version.data.git) return null
 
   const behind = version.data?.updates_available ?? 0
@@ -905,6 +1094,15 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
       {config.data?.platform === 'yahoo' && (
         <PublicProjectionsCard onImported={() => onChange?.()} />
       )}
+
+      <ConnectedLeagues
+        onChanged={() => {
+          config.reload()
+          health.reload()
+          league.reload()
+          onChange?.()
+        }}
+      />
 
       <PlatformPicker
         onChanged={() => {

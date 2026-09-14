@@ -1,14 +1,15 @@
-"""Keeping the Yahoo connection alive between requests.
+"""Keeping a Yahoo connection alive between requests.
 
 The OAuth machinery in `app.yahoo.oauth` deliberately knows nothing about
-storage: it holds tokens and calls back when they change.  This is the other
-half -- reading those tokens out of configuration and writing refreshed ones
-back, so a connection made once in the browser survives restarts and the hourly
-token expiry with no further interaction.
+storage: it holds tokens and calls back when they change. This is the other
+half -- reading those tokens off the user's connection and writing refreshed
+ones back, so a connection made once in the browser survives restarts and the
+hourly token expiry with no further interaction.
 
-Tokens are stored exactly where ESPN's cookies are: the local SQLite file (if
-they were entered in the app) or `.env` (if they were put there by hand). They
-are never returned by the API and never logged.
+Tokens belong to a person, not to the installation, so they live on the
+`Connection` row alongside that user's league. The Yahoo *app* credentials
+(client id and secret) are the opposite -- one developer app per installation,
+shared by everyone on it -- so those stay in `AppConfig`.
 """
 
 from __future__ import annotations
@@ -18,9 +19,11 @@ import logging
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
+from ..models import Connection
 from ..yahoo.client import YahooClient, YahooConnectionError
 from ..yahoo.oauth import YahooOAuth, YahooTokens
-from .runtime_config import effective_settings, write_overrides
+from .connections import apply_values, clear_yahoo_tokens
+from .runtime_config import effective_settings
 
 log = logging.getLogger(__name__)
 
@@ -34,10 +37,11 @@ def tokens_from_settings(settings: Settings) -> YahooTokens:
     )
 
 
-def store_tokens(session: Session, tokens: YahooTokens) -> None:
-    """Persist tokens as runtime configuration."""
-    write_overrides(
+def store_tokens(session: Session, connection: Connection, tokens: YahooTokens) -> None:
+    """Persist tokens onto the connection they belong to."""
+    apply_values(
         session,
+        connection,
         {
             "yahoo_access_token": tokens.access_token,
             "yahoo_refresh_token": tokens.refresh_token,
@@ -47,17 +51,9 @@ def store_tokens(session: Session, tokens: YahooTokens) -> None:
     )
 
 
-def clear_tokens(session: Session) -> None:
-    """Disconnect the Yahoo account, leaving the app registration in place."""
-    write_overrides(
-        session,
-        {
-            "yahoo_access_token": None,
-            "yahoo_refresh_token": None,
-            "yahoo_token_expires": None,
-            "yahoo_guid": None,
-        },
-    )
+def clear_tokens(session: Session, connection: Connection) -> None:
+    """Disconnect a Yahoo account, leaving the installation's app registration."""
+    clear_yahoo_tokens(session, connection)
 
 
 def build_oauth(settings: Settings | None = None, persist: bool = True) -> YahooOAuth:
@@ -65,19 +61,22 @@ def build_oauth(settings: Settings | None = None, persist: bool = True) -> Yahoo
 
     The refresh callback opens its own short session rather than borrowing the
     request's: a refresh can happen in the middle of an import, and losing the
-    new token because the surrounding transaction rolled back would log the
+    new token because the surrounding transaction rolled back would sign the
     user out for no visible reason.
     """
     settings = settings or get_settings()
+    connection_id = settings.active_connection_id
 
     def _save(tokens: YahooTokens) -> None:
-        if not persist:
+        if not persist or connection_id is None:
             return
         from ..db import session_scope
 
         try:
             with session_scope() as session:
-                store_tokens(session, tokens)
+                connection = session.get(Connection, connection_id)
+                if connection is not None:
+                    store_tokens(session, connection, tokens)
         except Exception as exc:  # pragma: no cover - storage is best effort
             log.warning("Could not persist refreshed Yahoo tokens: %s", exc)
 
@@ -91,17 +90,18 @@ def build_oauth(settings: Settings | None = None, persist: bool = True) -> Yahoo
 
 
 def build_client(settings: Settings | None = None) -> YahooClient:
-    """A YahooClient for the configured league. Raises if it cannot be built."""
+    """A YahooClient for the active connection. Raises if it cannot be built."""
     settings = settings or get_settings()
     if settings.yahoo_league_id is None:
         raise YahooConnectionError(
-            "No Yahoo league configured. Enter your league id on the League screen -- it is "
+            "No Yahoo league selected. Enter your league id on the League screen -- it is "
             "the number in your league URL."
         )
     if not settings.has_yahoo_app:
         raise YahooConnectionError(
-            "No Yahoo app configured. Create one at developer.yahoo.com (Fantasy Sports, "
-            "Read permission) and paste its Client ID and Client Secret in."
+            "This installation has no Yahoo app configured. Whoever runs the server needs to "
+            "create one at developer.yahoo.com (Fantasy Sports, Read permission) and add its "
+            "Client ID and Secret."
         )
     if not settings.has_yahoo_credentials:
         raise YahooConnectionError(
@@ -115,5 +115,5 @@ def build_client(settings: Settings | None = None) -> YahooClient:
 
 
 def settings_with_overrides(session: Session) -> Settings:
-    """Convenience for routes that need the effective settings only."""
+    """Convenience for callers that need installation settings only."""
     return effective_settings(session, get_settings())

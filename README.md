@@ -66,6 +66,20 @@ python -m venv .venv
 Then enter your league on the **League** tab.
 </details>
 
+### One person or several
+
+By default the app runs as **one implicit local account**: no login screen, no
+password, everything exactly as it was. That is the self-hosted case.
+
+Set `FWR_MULTI_USER=true` and it becomes a hosted app: accounts sign in with a
+password, and each one connects its own leagues. No account can see another's
+league, credentials, roster or waiver budget — that separation is in the schema,
+not in a filter someone has to remember to write.
+
+Either way, **one account can hold several leagues** — an ESPN league and a
+Yahoo league side by side — and switch between them from the header. Every
+screen renders whichever is active.
+
 ### Credentials
 
 You never have to edit a file. The **League** tab picks the platform and has a
@@ -83,7 +97,7 @@ which is what keeps your session cookies and tokens under your control.
 ## Contents
 
 1. [Installation](#1-installation)
-2. [ESPN credentials](#2-espn-credentials) · [Yahoo leagues](#yahoo-leagues)
+2. [ESPN credentials](#2-espn-credentials) · [Yahoo leagues](#yahoo-leagues) · [Accounts](#accounts-and-connected-leagues)
 3. [Starting the application](#3-starting-the-application)
 4. [Importing a league](#4-importing-a-league)
 5. [Running draft simulations](#5-running-draft-simulations)
@@ -180,6 +194,41 @@ Yahoo league instead. Two differences are worth knowing before you start:
 **[docs/yahoo.md](docs/yahoo.md)** covers the whole setup, including what to put
 on Yahoo's API access application form and how Yahoo's scoring categories are
 translated onto the engine's stat vocabulary.
+
+### Accounts and connected leagues
+
+A **connection** is one league you have hooked up, on one platform, with the
+credentials to read it. An account can hold several and exactly one is active;
+the header switches between them, and every screen follows.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FWR_MULTI_USER` | `false` | `true` turns on accounts and the login screen |
+| `FWR_ALLOW_REGISTRATION` | `true` | `false` for a closed beta |
+| `FWR_SESSION_DAYS` | `30` | How long a sign-in lasts |
+| `FWR_SECURE_COOKIES` | `true` | HTTPS-only session cookie; off only for local http testing |
+
+What is stored where, and why it matters once more than one person uses an
+install:
+
+* **Per account, per league** — ESPN cookies, Yahoo tokens, which team is yours,
+  your draft slot, your waiver budget. Personal, and never visible to another
+  account.
+* **Per installation** — the Yahoo developer app (client id and secret) and a
+  FantasyPros key. These belong to whoever runs the server and are shared by
+  everyone on it, which is exactly what the platforms expect an operator to
+  hold. **Only the first account to register can change them**, along with demo
+  mode and the in-app self-update, since all four affect every user of the
+  server. On a single-user install that account is you.
+
+Passwords are hashed with scrypt from the standard library; sessions are stored
+server-side with only a hash of the cookie, so signing out really ends a session
+and a stolen database does not hand over live logins.
+
+**Upgrading an existing install:** nothing to do. The first start migrates the
+database, moves your credentials out of the shared config table onto a
+connection, and attaches your league and players to it. It is idempotent, so a
+self-update that restarts twice is harmless.
 
 ### Verify before you trust it
 
@@ -631,12 +680,16 @@ backend/app/
     valuation.py       the board: Draft Score + explanations
     simulate.py        Monte Carlo mock drafts
   services/            provider selection, import, board caching, draft state
+    accounts.py        scrypt passwords and server-side sessions
+    connections.py     a user's leagues, their credentials, and the active one
+    scope.py           the one place that narrows a query to a connection
+  migrations.py        forward-only SQLite upgrade, run at startup
   api/                 FastAPI routers and serializers
 frontend/src/
   pages/               LeagueSettings, DraftBoard, LiveDraft, MyTeam, Simulator
   components.tsx       player cards, score bars, bottom sheet
   styles.css           mobile-first design system
-tests/                 549 tests, no network or credentials required
+tests/                 590 tests, no network or credentials required
 ```
 
 ### Credits

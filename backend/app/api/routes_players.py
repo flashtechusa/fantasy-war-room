@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..espn.constants import FLEX_ELIGIBLE
 from ..models import League, Player, PlayerProjection, ProjectionSource
+from ..services.scope import player_filters
 from .deps import BoardContext, board_dep
 from .serializers import serialize_board_meta, serialize_position, serialize_valuation
 
@@ -82,7 +83,7 @@ def _source_projections(
     """
     player = session.scalars(
         select(Player).where(
-            Player.season == league.season,
+            *player_filters(league),
             Player.espn_player_id == espn_player_id,
         )
     ).first()

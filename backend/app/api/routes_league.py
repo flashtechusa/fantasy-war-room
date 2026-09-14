@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings
 from ..db import get_db
+from ..models import Connection
 from ..espn.client import EspnConnectionError
 from ..models import HistoricalDraftPick, League, Player, ProjectionSource
 from ..projections.espn_public import EspnPublicError
@@ -19,8 +20,9 @@ from ..services import board as board_service
 from ..services import projections as projection_service
 from ..services.importer import import_league, import_players
 from ..services.provider import build_provider
+from ..services.scope import player_filters
 from ..yahoo.client import YahooConnectionError
-from .deps import league_dep, settings_dep
+from .deps import connection_dep, league_dep, settings_dep
 from .serializers import serialize_history, serialize_league
 
 log = logging.getLogger(__name__)
@@ -52,8 +54,9 @@ def run_import(
     payload: ImportRequest | None = None,
     session: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
+    connection: Connection | None = Depends(connection_dep),
 ) -> dict:
-    """Connect to ESPN (or the demo provider) and import everything."""
+    """Connect to the active league's platform and import everything."""
     payload = payload or ImportRequest()
     provider = build_provider(settings)
     try:
@@ -63,6 +66,7 @@ def run_import(
             settings=settings,
             include_players=payload.include_players,
             include_history=payload.include_history,
+            connection=connection,
         )
     except (EspnConnectionError, YahooConnectionError) as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
@@ -90,7 +94,7 @@ def run_import(
 
     board_service.clear_cache()
     player_count = session.scalar(
-        select(func.count()).select_from(Player).where(Player.season == league.season)
+        select(func.count()).select_from(Player).where(*player_filters(league))
     )
 
     return {

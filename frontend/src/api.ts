@@ -275,6 +275,8 @@ export interface HealthInfo {
   status: string
   season: number
   demo_mode: boolean
+  multi_user?: boolean
+  connection?: { id: number; platform: string; label: string } | null
   platform: 'espn' | 'yahoo'
   yahoo: {
     league_id_configured: boolean
@@ -536,6 +538,44 @@ export interface ConfigInfo {
   sources: Record<string, string>
 }
 
+export interface AccountInfo {
+  id: number
+  email: string
+  display_name: string
+  is_local: boolean
+  /** May change installation-wide settings: the Yahoo app, keys, self-update. */
+  is_admin: boolean
+  created_at?: string
+  last_login_at?: string | null
+}
+
+export interface ConnectionInfo {
+  id: number
+  platform: 'espn' | 'yahoo' | 'demo'
+  label: string
+  league_id: number | null
+  season: number
+  is_active: boolean
+  my_team_id: number | null
+  my_draft_slot: number | null
+  faab_remaining: number | null
+  espn_cookies_set: boolean
+  yahoo_connected: boolean
+}
+
+export interface AuthState {
+  multi_user: boolean
+  allow_registration: boolean
+  user: AccountInfo
+  connections: ConnectionInfo[]
+  active_connection_id: number | null
+}
+
+export interface ConnectionsResponse {
+  connections: ConnectionInfo[]
+  active_connection_id: number | null
+}
+
 export interface YahooStatus {
   platform: 'espn' | 'yahoo'
   app_configured: boolean
@@ -581,6 +621,53 @@ export interface ConfigSaveResult {
 
 export const api = {
   health: () => request<HealthInfo>('/api/health'),
+
+  // --- Accounts ---------------------------------------------------------
+  // A single-user install answers `me` with its implicit local account and
+  // never asks for a password; a hosted one requires the session cookie.
+  me: () => request<AuthState>('/api/auth/me'),
+  login: (email: string, password: string) =>
+    request<{ user: AccountInfo; connections: ConnectionInfo[] }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    }),
+  register: (email: string, password: string, display_name = '') =>
+    request<{ user: AccountInfo; connections: ConnectionInfo[] }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, display_name }),
+    }),
+  logout: () => request<{ signed_out: boolean }>('/api/auth/logout', { method: 'POST' }),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ changed: boolean }>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+
+  // --- Connected leagues ------------------------------------------------
+  // One account, several leagues, possibly on different platforms. Exactly
+  // one is active, and that is what every other endpoint answers about.
+  connections: () => request<ConnectionsResponse>('/api/connections'),
+  addConnection: (body: {
+    platform: 'espn' | 'yahoo' | 'demo'
+    league_id?: number | null
+    season?: number
+    label?: string
+    espn_swid?: string
+    espn_s2?: string
+  }) =>
+    request<ConnectionsResponse & { connection: ConnectionInfo }>('/api/connections', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  activateConnection: (id: number) =>
+    request<ConnectionsResponse>(`/api/connections/${id}/activate`, { method: 'POST' }),
+  updateConnection: (id: number, body: Record<string, unknown>) =>
+    request<ConnectionsResponse>(`/api/connections/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+  deleteConnection: (id: number) =>
+    request<ConnectionsResponse>(`/api/connections/${id}`, { method: 'DELETE' }),
 
   config: () => request<ConfigInfo>('/api/config'),
 

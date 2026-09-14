@@ -7,13 +7,15 @@ browser.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..espn.client import EspnClient, EspnConnectionError
+from ..models import Connection, User
 from ..services import board as board_service
+from ..services import connections as connection_service
 from ..services.provider import build_yahoo_client
 from ..services.runtime_config import (
     clear_overrides,
@@ -23,6 +25,8 @@ from ..services.runtime_config import (
 )
 from ..yahoo.client import YahooConnectionError
 from ..yahoo.oauth import YahooAuthError
+from ..services.runtime_config import APP_KEYS
+from .deps import connection_dep, current_user, require_admin
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -54,25 +58,55 @@ class EspnConfigRequest(BaseModel):
 
 
 @router.get("")
-def read_config(session: Session = Depends(get_db)) -> dict:
-    """Current effective configuration. Cookies are reported as set/unset only."""
-    return describe(session)
+def read_config(
+    session: Session = Depends(get_db),
+    connection: Connection | None = Depends(connection_dep),
+) -> dict:
+    """Current effective configuration. Credentials are reported as set/unset only."""
+    return describe(session, connection=connection)
 
 
 @router.put("")
 def update_config(
     payload: EspnConfigRequest,
     session: Session = Depends(get_db),
+    user: User = Depends(current_user),
+    connection: Connection | None = Depends(connection_dep),
 ) -> dict:
     """Save league configuration and immediately test the connection.
 
     Only the fields you send are changed; send an empty string to clear one.
+    Installation settings (the Yahoo app, a FantasyPros key) are stored once
+    for the server; everything league-shaped lands on your own connection.
     """
-    write_overrides(session, payload.model_dump(exclude_unset=True))
+    values = payload.model_dump(exclude_unset=True)
+
+    # Installation-wide settings belong to whoever runs the server. On a
+    # single-user install that is the person at the keyboard; on a hosted one,
+    # letting any account rewrite the Yahoo app or flip demo mode would affect
+    # everybody.
+    installation_values = {key: value for key, value in values.items() if key in APP_KEYS}
+    if installation_values and not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Only the account that set this server up can change "
+                f"{', '.join(sorted(installation_values))}."
+            ),
+        )
+    write_overrides(session, values)
+    connection = connection_service.apply_config_values(
+        session, user, connection, values
+    )
+    session.commit()
     board_service.clear_cache()
 
-    settings = effective_settings(session)
-    result: dict = {"saved": True, "config": describe(session), "connection": None}
+    settings = effective_settings(session, connection=connection)
+    result: dict = {
+        "saved": True,
+        "config": describe(session, connection=connection),
+        "connection": None,
+    }
 
     if settings.is_yahoo:
         if settings.can_reach_yahoo:
@@ -95,8 +129,17 @@ def update_config(
 
 
 @router.delete("")
-def reset_config(session: Session = Depends(get_db)) -> dict:
-    """Drop UI-entered configuration and fall back to the environment."""
+def reset_config(
+    session: Session = Depends(get_db),
+    connection: Connection | None = Depends(connection_dep),
+    user: User = Depends(require_admin),
+) -> dict:
+    """Drop UI-entered installation settings and fall back to the environment.
+
+    Connections are left alone: they are your leagues, and dropping them here
+    would delete everything imported under them as a side effect of clearing a
+    FantasyPros key.
+    """
     clear_overrides(session)
     board_service.clear_cache()
-    return {"cleared": True, "config": describe(session)}
+    return {"cleared": True, "config": describe(session, connection=connection)}

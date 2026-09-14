@@ -1,6 +1,9 @@
 import { NavLink, Navigate, Route, Routes } from 'react-router-dom'
 import { api } from './api'
+import { Loading } from './components'
+import ConnectionSwitcher from './ConnectionSwitcher'
 import { useAsync } from './useAsync'
+import SignIn from './pages/SignIn'
 import LeagueSettings from './pages/LeagueSettings'
 import DraftBoard from './pages/DraftBoard'
 import LiveDraft from './pages/LiveDraft'
@@ -24,7 +27,44 @@ const NAV = [
 ]
 
 export default function App() {
+  // Who is signed in, and which leagues they have connected. On a single-user
+  // install this resolves to the implicit local account without a login
+  // screen, so nothing about running it yourself changes.
+  const auth = useAsync(() => api.me(), [])
   const health = useAsync(() => api.health(), [])
+
+  function reloadAll() {
+    auth.reload()
+    health.reload()
+  }
+
+  if (!auth.data && auth.loading) {
+    return (
+      <div className="app">
+        <main className="app-main">
+          <Loading what="your account" />
+        </main>
+      </div>
+    )
+  }
+
+  // 401 is the only error that means "sign in"; anything else is a real
+  // failure and should not be papered over with a login form.
+  if (!auth.data && auth.error) {
+    if (/sign in/i.test(auth.error)) {
+      return <SignIn allowRegistration onSignedIn={reloadAll} />
+    }
+    return (
+      <div className="app">
+        <main className="app-main">
+          <div className="banner error">{auth.error}</div>
+        </main>
+      </div>
+    )
+  }
+
+  const multiUser = auth.data?.multi_user ?? false
+  const connections = auth.data?.connections ?? []
 
   return (
     <div className="app">
@@ -34,9 +74,29 @@ export default function App() {
           <div className="sub">
             {health.data?.league
               ? `${health.data.league.name} · ${health.data.league.season}`
-              : 'No league imported'}
+              : connections.length
+                ? 'No league imported'
+                : 'No league connected'}
             {health.data?.league?.source === 'demo' && ' · DEMO DATA'}
           </div>
+        </div>
+        <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <ConnectionSwitcher
+            connections={connections}
+            activeId={auth.data?.active_connection_id ?? null}
+            onSwitched={reloadAll}
+          />
+          {multiUser && (
+            <button
+              className="btn sm"
+              onClick={async () => {
+                await api.logout()
+                reloadAll()
+              }}
+            >
+              Sign out
+            </button>
+          )}
         </div>
       </header>
 
@@ -62,7 +122,7 @@ export default function App() {
           <Route path="/team" element={<MyTeam />} />
           <Route path="/teams" element={<PowerRankings />} />
           <Route path="/simulate" element={<Simulator />} />
-          <Route path="/settings" element={<LeagueSettings onChange={health.reload} />} />
+          <Route path="/settings" element={<LeagueSettings onChange={reloadAll} />} />
           <Route path="*" element={<Navigate to="/week" replace />} />
         </Routes>
       </main>

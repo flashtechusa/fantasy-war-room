@@ -117,6 +117,31 @@ class Settings(BaseSettings):
     #: not report remaining budget reliably, so it is entered in the app.
     faab_remaining: int | None = None
 
+    #: Which connection these settings describe, set by the overlay in
+    #: `app.services.connections`. Carried on Settings because Settings *is*
+    #: the per-request context the services already pass around -- and a
+    #: refreshed Yahoo token has to know which connection to write itself back
+    #: to.
+    active_connection_id: int | None = None
+
+    # --- Accounts ---------------------------------------------------------
+    #: Off for a self-hosted install: there is one implicit local account,
+    #: signed in automatically, and no login screen. A hosted deployment turns
+    #: this on, and then every request is scoped to whoever holds the session
+    #: cookie. The data model is the same either way -- this only decides
+    #: whether a password is required to get in.
+    multi_user: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("FWR_MULTI_USER", "MULTI_USER"),
+    )
+    #: Whether strangers may create accounts. Turn off to run a closed beta.
+    allow_registration: bool = True
+    #: How long a sign-in lasts.
+    session_days: int = Field(default=30, ge=1, le=365)
+    #: Send the session cookie only over HTTPS. Leave on in production; turn it
+    #: off only to test multi-user over plain http on localhost.
+    secure_cookies: bool = True
+
     # --- App --------------------------------------------------------------
     database_url: str = "sqlite:///./data/fantasy_war_room.db"
     demo_mode: bool = False

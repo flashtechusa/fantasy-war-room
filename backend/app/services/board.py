@@ -18,6 +18,7 @@ from ..engine.league_shape import LeagueShape
 from ..engine.scoring import LeagueScoring
 from ..engine.valuation import BoardResult, PlayerInput, ValuationEngine
 from ..models import League, Player, PlayerProjection, ProjectionSource
+from .scope import player_filters
 
 
 class LeagueNotImported(RuntimeError):
@@ -103,7 +104,7 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
 
     latest_player = session.scalars(
         select(Player.updated_at)
-        .where(Player.season == league.season)
+        .where(*player_filters(league))
         .order_by(Player.updated_at.desc())
         .limit(1)
     ).first()
@@ -125,7 +126,7 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
     if not weights:
         weights = {"espn": 1.0, "demo": 1.0}
 
-    players = session.scalars(select(Player).where(Player.season == league.season)).all()
+    players = session.scalars(select(Player).where(*player_filters(league))).all()
     if not players:
         raise LeagueNotImported(
             "No players imported for this season. Run an import from League Settings."

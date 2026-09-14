@@ -36,7 +36,7 @@ this app:
 | Business Name & Address | Your company, or your own name and address for a personal project. |
 | Consumer-Facing Product or App Name | `Fantasy War Room` |
 | Brief Company Description | One or two sentences on who you are. A personal or internal tool is fine — say so rather than inflating it. |
-| Website URL or App Store Details | The GitHub repository URL for this project. There is no hosted version; the app runs on the user's own machine. |
+| Website URL or App Store Details | Where the app actually lives — your deployment's URL, or the GitHub repository if you only run it locally. It needs to resolve to something real when they check. |
 | Describe Your Intended Use Case | The field the review actually turns on. Be specific about *which* data and *why* — see the draft below. |
 | Expected Users | The real number. For one league, that is a handful — pick the smallest bracket. |
 | Client ID | Blank unless you already have a Yahoo Developer Network app; access is provisioned after approval otherwise. |
@@ -44,17 +44,17 @@ this app:
 
 A use-case description that says what the app reads and why:
 
-> Fantasy War Room is a self-hosted fantasy football draft and season assistant.
-> Each user runs it on their own machine and connects their own Yahoo account
-> via OAuth; there is no hosted service and no shared data store. For the
-> leagues that user is already a member of, it reads league settings and scoring
-> rules, teams and rosters, draft results, and the league player pool with
-> ownership and draft-analysis data. It uses those to compute value-over-
-> replacement rankings under that league's exact scoring rules, recommend draft
-> picks, set weekly lineups, and evaluate waiver claims and trades. Read access
-> only — the app never writes to Yahoo, and every recommendation is executed by
-> the user in Yahoo themselves. Expected use is personal, at the scale of a
-> single league per installation.
+> Fantasy War Room is a fantasy football draft and season-management assistant.
+> Each user signs in and connects their own Yahoo account via OAuth; the
+> application acts only on behalf of that user, reading only the leagues they
+> are already a member of, and one user's league data is never exposed to
+> another. For those leagues it reads league settings and scoring rules, teams
+> and rosters, draft results, and the league player pool with ownership and
+> draft-analysis data. It uses those to compute value-over-replacement rankings
+> under that league's exact scoring rules, recommend draft picks, set weekly
+> lineups, and evaluate waiver claims and trades. Read access only — the
+> application never writes to Yahoo, and every recommendation is carried out by
+> the user in Yahoo themselves.
 
 Adjust it so it stays true of what you are actually doing; the specifics are the
 point of the field.
@@ -65,17 +65,35 @@ answers:
 - `oob` — Yahoo shows you a code on screen and you paste it into the app. This
   is the default here and the only thing that works on a laptop with no public
   HTTPS address.
-- `https://localhost:8000/api/yahoo/callback` — if your app registration
-  requires a URL. Set `FWR_YAHOO_REDIRECT_URI` to exactly the same string; the
-  app serves that callback. Yahoo insists on `https`, and browsers will warn
-  about the certificate on localhost.
+- `https://your-deployment/api/yahoo/auth/callback` — if your app registration
+  requires a URL. That exact path is what the app serves; set
+  `FWR_YAHOO_REDIRECT_URI` to the same string. Yahoo insists on `https`, so for
+  local testing `https://localhost:8000/api/yahoo/auth/callback` works, though
+  the browser will warn about the certificate.
 
 Whichever you choose, it must match character-for-character on both sides or
 Yahoo rejects the token exchange.
 
 ---
 
-## 2. Connect the app
+## 2. Who holds what
+
+On a **single-user install** this distinction does not come up: you are the
+operator and the user.
+
+On a **hosted install** it matters, and the app stores the two halves
+separately:
+
+* The **Yahoo app** — Client ID and Secret — belongs to whoever runs the server.
+  One developer app serves every account on it. Stored once, installation-wide.
+* The **Yahoo account and league** belong to each user. They authorise their own
+  Yahoo account, their tokens are stored against their own connection, and no
+  other account can see or use them.
+
+That is also what the Yahoo application form describes: one registered app, many
+users, each reading only the leagues they already belong to.
+
+## 3. Connect the app
 
 In the running app, open the **League** tab:
 
@@ -98,7 +116,7 @@ handshake still has to happen in the browser once.
 
 ---
 
-## 3. What is different once it is running
+## 4. What is different once it is running
 
 **Projections come from ESPN.** The League screen shows the match rate. Players
 ESPN's public feed did not cover have no projection and sort to the bottom;

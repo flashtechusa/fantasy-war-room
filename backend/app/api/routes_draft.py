@@ -69,7 +69,7 @@ def make_pick(
             draft,
             espn_player_id=payload.espn_player_id,
             overall_pick=payload.overall_pick,
-            league_season=league.season,
+            league=league,
         )
     except draft_service.DraftError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

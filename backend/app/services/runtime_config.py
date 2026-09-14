@@ -1,11 +1,21 @@
 """Runtime configuration overlay.
 
-Credentials can come from the environment (`.env`, a Codespaces secret, a
+Configuration can come from the environment (`.env`, a Codespaces secret, a
 Docker env file) *or* be entered in the UI. UI values win, because if you
 bothered to type them into the running app that's clearly the intent.
 
 This is what makes the app usable somewhere you only have a browser -- a
 Codespace, a tablet, a phone -- with no file editing at all.
+
+Two tiers, and the difference matters once more than one person uses an
+install:
+
+* **Installation settings** (`APP_KEYS`) live here, in `app_config`. The Yahoo
+  developer app and a FantasyPros key belong to whoever runs the server and are
+  shared by everyone on it.
+* **Per-league settings** (`CONNECTION_KEYS`) do not live here at all. League
+  ids, ESPN cookies, Yahoo tokens, which team is yours -- those belong to one
+  person's connection, and `app.services.connections` owns them.
 """
 
 from __future__ import annotations
@@ -16,26 +26,43 @@ from sqlalchemy.orm import Session
 from ..config import Settings, get_settings
 from ..models import AppConfig
 
-#: Keys that may be set at runtime, mapped to the Settings field they override.
-OVERRIDABLE = {
+#: Installation-wide settings, stored in `app_config` and shared by every user.
+APP_KEYS = {
+    "demo_mode": bool,
+    "fantasypros_api_key": str,
+    "yahoo_client_id": str,
+    "yahoo_client_secret": str,
+    "yahoo_redirect_uri": str,
+}
+
+#: Per-league settings, stored on the user's connection rather than here.
+#: Listed so the config API can route a write to the right place instead of
+#: silently dropping it.
+CONNECTION_KEYS = {
     "platform": str,
     "espn_league_id": int,
     "espn_season": int,
     "espn_swid": str,
     "espn_s2": str,
     "yahoo_league_id": int,
-    "yahoo_client_id": str,
-    "yahoo_client_secret": str,
-    "yahoo_redirect_uri": str,
     "yahoo_access_token": str,
     "yahoo_refresh_token": str,
     "yahoo_token_expires": float,
     "yahoo_guid": str,
-    "demo_mode": bool,
     "my_team_id": int,
+    "my_team_name": str,
     "my_draft_slot": int,
     "faab_remaining": int,
-    "fantasypros_api_key": str,
+}
+
+#: Every key the config API accepts, wherever it ends up being stored.
+OVERRIDABLE = {**APP_KEYS, **CONNECTION_KEYS}
+
+#: Which connection field a config key maps onto.
+CONNECTION_FIELD = {
+    "espn_league_id": "platform_league_id",
+    "yahoo_league_id": "platform_league_id",
+    "espn_season": "season",
 }
 
 #: Never returned by the API.
@@ -63,10 +90,10 @@ def _coerce(key: str, raw: str):
 
 
 def read_overrides(session: Session) -> dict:
-    """Stored runtime overrides, coerced to their Settings types."""
+    """Stored installation settings, coerced to their Settings types."""
     out: dict = {}
     for row in session.scalars(select(AppConfig)).all():
-        if row.key not in OVERRIDABLE:
+        if row.key not in APP_KEYS:
             continue
         try:
             value = _coerce(row.key, row.value)
@@ -77,23 +104,42 @@ def read_overrides(session: Session) -> dict:
     return out
 
 
-def effective_settings(session: Session, base: Settings | None = None) -> Settings:
-    """Environment settings with runtime overrides applied on top."""
+def effective_settings(
+    session: Session,
+    base: Settings | None = None,
+    connection=None,
+) -> Settings:
+    """Environment settings, then installation settings, then the connection.
+
+    The order is the precedence: the environment is the floor, the operator's
+    stored settings override it, and the active connection -- the actual league
+    this request is about -- wins over both.
+    """
     base = base or get_settings()
     overrides = read_overrides(session)
-    if not overrides:
-        return base
-    # Re-validate so the SWID brace-normalisation and blank handling still run.
-    merged = base.model_dump()
-    merged.update(overrides)
-    return Settings.model_validate(merged)
+    if overrides:
+        # Re-validate so the SWID brace-normalisation and blank handling still run.
+        merged = base.model_dump()
+        merged.update(overrides)
+        base = Settings.model_validate(merged)
+
+    if connection is not None:
+        from .connections import settings_for
+
+        return settings_for(connection, base)
+    return base
 
 
 def write_overrides(session: Session, values: dict) -> None:
-    """Persist runtime overrides. A value of None clears that key."""
+    """Persist installation settings. A value of None clears that key.
+
+    Per-league keys are ignored here on purpose: they belong to a connection,
+    and writing them to a shared table is how one user ends up holding another
+    user's cookies.
+    """
     existing = {row.key: row for row in session.scalars(select(AppConfig)).all()}
     for key, value in values.items():
-        if key not in OVERRIDABLE:
+        if key not in APP_KEYS:
             continue
         if value is None or value == "":
             if key in existing:
@@ -114,13 +160,15 @@ def clear_overrides(session: Session) -> None:
     session.commit()
 
 
-def describe(session: Session, base: Settings | None = None) -> dict:
+def describe(session: Session, base: Settings | None = None, connection=None) -> dict:
     """Safe-to-display configuration state. Secrets are reported, never returned."""
     base = base or get_settings()
-    settings = effective_settings(session, base)
+    settings = effective_settings(session, base, connection)
     overrides = read_overrides(session)
 
     def source(key: str) -> str:
+        if key in CONNECTION_KEYS:
+            return "connection"
         return "ui" if key in overrides else "environment"
 
     return {
@@ -130,7 +178,8 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "demo_mode": settings.demo_mode,
         "my_team_id": settings.my_team_id,
         "my_draft_slot": settings.my_draft_slot,
-        "faab_remaining": overrides.get("faab_remaining"),
+        # Per-league values come from the connection, not the shared table.
+        "faab_remaining": settings.faab_remaining,
         "swid_set": bool(settings.espn_swid),
         "espn_s2_set": bool(settings.espn_s2),
         "fantasypros_key_set": bool(settings.fantasypros_api_key),
@@ -143,5 +192,12 @@ def describe(session: Session, base: Settings | None = None) -> dict:
         "yahoo_app_configured": settings.has_yahoo_app,
         "yahoo_connected": settings.has_yahoo_credentials,
         "ready_for_yahoo": settings.can_reach_yahoo,
+        "connection": _describe_connection(connection),
         "sources": {key: source(key) for key in OVERRIDABLE},
     }
+
+
+def _describe_connection(connection) -> dict | None:
+    from .connections import describe as describe_connection
+
+    return describe_connection(connection)

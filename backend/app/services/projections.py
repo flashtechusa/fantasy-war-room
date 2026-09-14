@@ -27,6 +27,7 @@ from ..projections.fantasypros import (
     FantasyProsPlayer,
 )
 from ..projections.matching import Candidate, PlayerMatcher
+from .scope import player_filters
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def store_projections(
     Returns a report including what failed to match, because a silent 60% match
     rate looks identical to a working import from the outside.
     """
-    ours = session.scalars(select(Player).where(Player.season == league.season)).all()
+    ours = session.scalars(select(Player).where(*player_filters(league))).all()
     matcher = PlayerMatcher(
         [
             Candidate(
@@ -126,7 +127,7 @@ def _has_other_projections(session: Session, league: League, source_key: str) ->
             select(func.count(PlayerProjection.id))
             .join(Player, Player.id == PlayerProjection.player_id)
             .where(
-                Player.season == league.season,
+                *player_filters(league),
                 PlayerProjection.source_key != source_key,
             )
         )
@@ -156,7 +157,7 @@ def import_espn_public(
     report = store_projections(session, league, players, PUBLIC_SOURCE_KEY)
 
     pool_size = session.scalar(
-        select(func.count(Player.id)).where(Player.season == league.season)
+        select(func.count(Player.id)).where(*player_filters(league))
     ) or 0
     coverage = (report["matched"] / pool_size) if pool_size else 0.0
     report["pool_size"] = pool_size
@@ -214,7 +215,7 @@ def import_fantasypros(
     report = store_projections(session, league, players, SOURCE_KEY)
 
     pool_size = session.scalar(
-        select(func.count(Player.id)).where(Player.season == league.season)
+        select(func.count(Player.id)).where(*player_filters(league))
     ) or 0
     coverage = (report["matched"] / pool_size) if pool_size else 0.0
     report["pool_size"] = pool_size

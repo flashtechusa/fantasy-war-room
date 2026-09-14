@@ -20,6 +20,7 @@ from ..models import (
     PlayerWeeklyProjection,
     ProjectionSource,
 )
+from .scope import player_filters
 
 #: Positions the season tools reason about.
 KNOWN_POSITIONS = {"QB", "RB", "WR", "TE", "K", "DST"}
@@ -46,7 +47,7 @@ def weekly_points_by_player(
         .join(Player, Player.id == PlayerWeeklyProjection.player_id)
         .where(
             PlayerWeeklyProjection.week == week,
-            Player.season == league.season,
+            *player_filters(league),
         )
     ).all()
 
@@ -86,7 +87,7 @@ def build_weekly_players(
     scoring = engine.scoring
     week_points = weekly_points_by_player(session, league, scoring, week)
 
-    stmt = select(Player).where(Player.season == league.season)
+    stmt = select(Player).where(*player_filters(league))
     if espn_player_ids is not None:
         if not espn_player_ids:
             return []

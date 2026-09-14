@@ -20,14 +20,16 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..config import Settings
+from ..config import Settings, get_settings
 from ..db import get_db
+from ..models import Connection, User
 from ..services import board as board_service
+from ..services import connections as connection_service
 from ..services.runtime_config import describe, write_overrides
 from ..services.yahoo_auth import build_client, build_oauth, clear_tokens, store_tokens
 from ..yahoo.client import YahooConnectionError, fetch_user_leagues
 from ..yahoo.oauth import OUT_OF_BAND, YahooAuthError
-from .deps import settings_dep
+from .deps import connection_dep, current_user, require_admin, settings_dep
 
 log = logging.getLogger(__name__)
 
@@ -56,9 +58,10 @@ class YahooCodeRequest(BaseModel):
 def read_status(
     session: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
+    connection: Connection | None = Depends(connection_dep),
 ) -> dict:
     """What is configured, what is connected, and what is still missing."""
-    config = describe(session)
+    config = describe(session, connection=connection)
     connection = None
     if settings.can_reach_yahoo:
         try:
@@ -82,13 +85,27 @@ def read_status(
 def save_app(
     payload: YahooAppRequest,
     session: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+    connection: Connection | None = Depends(connection_dep),
 ) -> dict:
-    """Store the Yahoo app credentials and switch this install to Yahoo."""
+    """Store the Yahoo app credentials and point this account at Yahoo.
+
+    The Client ID and Secret are installation-wide -- one Yahoo developer app
+    serves every user of this server -- while the league belongs to whoever is
+    signed in.
+    """
     values = payload.model_dump(exclude_unset=True)
-    values["platform"] = "yahoo"
     write_overrides(session, values)
+
+    connection = connection_service.apply_config_values(
+        session,
+        user,
+        connection if connection is None or connection.is_yahoo else None,
+        {"platform": "yahoo", **{k: v for k, v in values.items() if k == "yahoo_league_id"}},
+    )
+    session.commit()
     board_service.clear_cache()
-    return {"saved": True, "config": describe(session)}
+    return {"saved": True, "config": describe(session, connection=connection)}
 
 
 @router.post("/auth/start")
@@ -118,6 +135,8 @@ def complete_auth(
     payload: YahooCodeRequest,
     session: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
+    user: User = Depends(current_user),
+    connection: Connection | None = Depends(connection_dep),
 ) -> dict:
     """Trade the code Yahoo showed the user for tokens, and store them."""
     oauth = build_oauth(settings, persist=False)
@@ -128,11 +147,32 @@ def complete_auth(
             status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
         ) from exc
 
-    store_tokens(session, tokens)
-    write_overrides(session, {"platform": "yahoo"})
+    connection = _yahoo_connection(session, user, connection)
+    store_tokens(session, connection, tokens)
+    session.commit()
     board_service.clear_cache()
-    log.info("Connected a Yahoo account.")
-    return {"connected": True, "config": describe(session)}
+    log.info("Connected a Yahoo account for user %s.", user.id)
+    return {"connected": True, "config": describe(session, connection=connection)}
+
+
+def _yahoo_connection(
+    session: Session, user: User, connection: Connection | None
+) -> Connection:
+    """The connection these Yahoo tokens belong on.
+
+    An account whose active connection is an ESPN league gets a new Yahoo one
+    rather than having its ESPN league overwritten -- holding both at once is
+    the point of connections.
+    """
+    if connection is not None and connection.is_yahoo:
+        return connection
+    for existing in connection_service.list_connections(session, user):
+        if existing.is_yahoo:
+            connection_service.set_active(session, user, existing)
+            return existing
+    return connection_service.create_connection(
+        session, user, platform="yahoo", season=get_settings().espn_season
+    )
 
 
 @router.get("/auth/callback", response_class=HTMLResponse)
@@ -141,6 +181,8 @@ def auth_callback(
     error: str = Query(default=""),
     session: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
+    user: User = Depends(current_user),
+    connection: Connection | None = Depends(connection_dep),
 ) -> HTMLResponse:
     """Where Yahoo lands when a real redirect URI is configured.
 
@@ -159,8 +201,8 @@ def auth_callback(
             _page("Could not finish connecting to Yahoo", str(exc)),
             status_code=status.HTTP_400_BAD_REQUEST,
         )
-    store_tokens(session, tokens)
-    write_overrides(session, {"platform": "yahoo"})
+    store_tokens(session, _yahoo_connection(session, user, connection), tokens)
+    session.commit()
     board_service.clear_cache()
     return HTMLResponse(
         _page("Yahoo connected", "You can close this tab and go back to the app.")
@@ -168,11 +210,16 @@ def auth_callback(
 
 
 @router.delete("/auth")
-def disconnect(session: Session = Depends(get_db)) -> dict:
-    """Forget the Yahoo tokens, keeping the app registration."""
-    clear_tokens(session)
+def disconnect(
+    session: Session = Depends(get_db),
+    connection: Connection | None = Depends(connection_dep),
+) -> dict:
+    """Forget this connection's Yahoo tokens, keeping the app registration."""
+    if connection is not None:
+        clear_tokens(session, connection)
+        session.commit()
     board_service.clear_cache()
-    return {"connected": False, "config": describe(session)}
+    return {"connected": False, "config": describe(session, connection=connection)}
 
 
 @router.get("/leagues")

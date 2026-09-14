@@ -67,7 +67,15 @@ def get_session_factory() -> sessionmaker[Session]:
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    """Create the schema, migrating an older database first if it needs it.
+
+    The migration is forward-only and idempotent, so this stays a safe thing to
+    run on every start -- which matters when the app updates itself in place.
+    """
+    from .migrations import migrate
+
+    engine = get_engine()
+    migrate(engine, lambda: Base.metadata.create_all(bind=engine))
 
 
 def reset_engine() -> None:

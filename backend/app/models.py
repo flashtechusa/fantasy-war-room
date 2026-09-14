@@ -1,7 +1,16 @@
 """Persistence layer.
 
-Everything imported from ESPN lands here so the app keeps working (and stays
-fast) when ESPN is slow, rate-limiting, or simply unreachable mid-draft.
+Everything imported from a platform lands here so the app keeps working (and
+stays fast) when that platform is slow, rate-limiting, or simply unreachable
+mid-draft.
+
+**Tenancy.** A `User` owns one or more `Connection` rows -- one per league they
+have hooked up, on either platform -- and everything league-shaped hangs off a
+connection: the league, its teams, its draft, and its player pool. Two people
+who happen to be in the same ESPN league get their own rows, because almost
+everything here is answered from one manager's point of view (`is_mine`, waiver
+budget, draft slot). Sharing them would be a data-leak bug wearing a
+storage-saving costume.
 """
 
 from __future__ import annotations
@@ -30,6 +39,136 @@ class Base(DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
+# Accounts and connections
+# ---------------------------------------------------------------------------
+
+
+class User(Base):
+    """One person with an account.
+
+    Single-user installs still have exactly one of these -- created on first
+    run and signed in automatically -- so the self-hosted experience is
+    unchanged and there is only ever one code path to reason about.
+    """
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(120), default="")
+
+    #: scrypt hash and its salt, both hex. Empty for the implicit local account,
+    #: which cannot be signed in to over the network.
+    password_hash: Mapped[str] = mapped_column(String(256), default="")
+    password_salt: Mapped[str] = mapped_column(String(64), default="")
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_local: Mapped[bool] = mapped_column(Boolean, default=False)
+    #: May change installation-wide settings: the Yahoo developer app, the
+    #: FantasyPros key, demo mode, self-update. The first account to register
+    #: gets it, because that is whoever set the server up.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    connections: Mapped[list["Connection"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan", order_by="Connection.id"
+    )
+
+
+class UserSession(Base):
+    """A signed-in browser session.
+
+    Server-side rather than a self-contained token so that signing out, or
+    revoking a session, actually ends it. Only the hash of the cookie value is
+    stored -- a leaked database does not hand over live sessions.
+    """
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    token_hash: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    user_agent: Mapped[str] = mapped_column(String(300), default="")
+
+
+class Connection(Base):
+    """One league a user has connected, on one platform.
+
+    This is what makes "my ESPN league and my Yahoo league" a switch rather
+    than a reinstall: a user may hold several, exactly one of which is active,
+    and the active one decides which credentials every request uses and which
+    league every screen renders.
+
+    Credentials live here, per user per league, because that is what they are.
+    Operator-level configuration (the Yahoo developer app, a FantasyPros key)
+    stays in `AppConfig` -- it belongs to the installation, not to a person.
+    """
+
+    __tablename__ = "connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "platform", "platform_league_id", "season", name="uq_connection_league"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    platform: Mapped[str] = mapped_column(String(20), default="espn")  # espn | yahoo | demo
+    label: Mapped[str] = mapped_column(String(120), default="")
+    platform_league_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    season: Mapped[int] = mapped_column(Integer, default=2026)
+
+    #: Exactly one connection per user is active; the API enforces it.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # -- credentials, per user per league -------------------------------
+    espn_swid: Mapped[str] = mapped_column(String(200), default="")
+    espn_s2: Mapped[str] = mapped_column(String(600), default="")
+    yahoo_access_token: Mapped[str] = mapped_column(String(1200), default="")
+    yahoo_refresh_token: Mapped[str] = mapped_column(String(600), default="")
+    yahoo_token_expires: Mapped[float] = mapped_column(Float, default=0.0)
+    yahoo_guid: Mapped[str] = mapped_column(String(120), default="")
+
+    # -- this manager's view of the league ------------------------------
+    my_team_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    my_team_name: Mapped[str] = mapped_column(String(200), default="")
+    my_draft_slot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    faab_remaining: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    user: Mapped[User] = relationship(back_populates="connections")
+
+    @property
+    def is_yahoo(self) -> bool:
+        return self.platform == "yahoo"
+
+    @property
+    def has_yahoo_tokens(self) -> bool:
+        return bool(self.yahoo_access_token and self.yahoo_refresh_token)
+
+    def describe(self) -> str:
+        """A name for the switcher, falling back to something recognisable."""
+        if self.label:
+            return self.label
+        if self.platform_league_id:
+            return f"{self.platform.upper()} {self.platform_league_id} ({self.season})"
+        return f"{self.platform.upper()} ({self.season})"
+
+
+# ---------------------------------------------------------------------------
 # Phase 1 -- league import
 # ---------------------------------------------------------------------------
 
@@ -55,12 +194,24 @@ class AppConfig(Base):
 
 
 class League(Base):
-    """One row per (league_id, season). Everything else hangs off this."""
+    """One row per (connection, league_id, season). Everything else hangs off this.
+
+    Scoped to a connection rather than global: two users in the same league
+    each need their own copy, because `is_mine`, the draft slot and the waiver
+    budget are answers to "whose league is this?".
+    """
 
     __tablename__ = "leagues"
-    __table_args__ = (UniqueConstraint("espn_league_id", "season", name="uq_league_season"),)
+    __table_args__ = (
+        UniqueConstraint("connection_id", "espn_league_id", "season", name="uq_league_season"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True, nullable=True
+    )
+    #: The league id on whichever platform imported it. The column name predates
+    #: Yahoo support; renaming it would break every existing database.
     espn_league_id: Mapped[int] = mapped_column(Integer, index=True)
     season: Mapped[int] = mapped_column(Integer, index=True)
 
@@ -190,12 +341,23 @@ class HistoricalDraftPick(Base):
 
 
 class Player(Base):
-    """Season-scoped player record. Projection numbers live in PlayerProjection."""
+    """Season-scoped player record. Projection numbers live in PlayerProjection.
+
+    Scoped to a connection for two reasons. Player ids are per-platform, so an
+    ESPN id and a Yahoo id can collide on different people; and `availability`
+    and `on_team_id` are answers about one specific league, so sharing a row
+    between two leagues would show one manager the other's waiver wire.
+    """
 
     __tablename__ = "players"
-    __table_args__ = (UniqueConstraint("season", "espn_player_id", name="uq_player_season"),)
+    __table_args__ = (
+        UniqueConstraint("connection_id", "season", "espn_player_id", name="uq_player_season"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True, nullable=True
+    )
     season: Mapped[int] = mapped_column(Integer, index=True)
     espn_player_id: Mapped[int] = mapped_column(Integer, index=True)
 

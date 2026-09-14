@@ -1,4 +1,9 @@
-"""Runtime ESPN configuration entered through the UI."""
+"""Runtime configuration entered through the UI.
+
+League-shaped settings live on the signed-in account's connection now, which is
+why `sources` reports them as "connection" rather than "ui" or "environment" --
+the same value, stored somewhere that belongs to one person.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ class TestConfigEndpoint:
         body = client.get("/api/config").json()
         assert body["espn_league_id"] is None
         assert body["swid_set"] is False
-        assert body["sources"]["espn_league_id"] == "environment"
+        assert body["sources"]["espn_league_id"] == "connection"
 
     def test_saving_config_takes_effect_immediately(self, client):
         response = client.put(
@@ -18,7 +23,7 @@ class TestConfigEndpoint:
         assert response.status_code == 200
         config = response.json()["config"]
         assert config["espn_league_id"] == 11507
-        assert config["sources"]["espn_league_id"] == "ui"
+        assert config["sources"]["espn_league_id"] == "connection"
         # And the rest of the app sees it without a restart.
         assert client.get("/api/health").json()["espn"]["league_id_configured"] is True
 
@@ -45,12 +50,20 @@ class TestConfigEndpoint:
         assert config["espn_season"] == 2027
         assert config["espn_s2_set"] is True
 
-    def test_reset_falls_back_to_the_environment(self, client):
-        client.put("/api/config", json={"espn_league_id": 11507})
+    def test_reset_clears_installation_settings_but_keeps_your_leagues(self, client):
+        """Reset drops what the operator configured, not the user's connections.
+
+        Clearing a FantasyPros key should not delete the league you connected
+        and everything imported under it.
+        """
+        client.put(
+            "/api/config", json={"espn_league_id": 11507, "fantasypros_api_key": "key"}
+        )
         client.delete("/api/config")
         config = client.get("/api/config").json()
-        assert config["espn_league_id"] is None
-        assert config["sources"]["espn_league_id"] == "environment"
+
+        assert config["fantasypros_key_set"] is False
+        assert config["espn_league_id"] == 11507
 
     def test_invalid_values_are_rejected(self, client):
         assert client.put("/api/config", json={"espn_league_id": 0}).status_code == 422

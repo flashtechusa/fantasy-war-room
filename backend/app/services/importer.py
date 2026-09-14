@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..models import (
+    Connection,
     HistoricalDraftPick,
     League,
     LeagueTeam,
@@ -27,6 +28,7 @@ from ..models import (
     utcnow,
 )
 from .provider import DataProvider, build_provider
+from .scope import player_filters
 
 log = logging.getLogger(__name__)
 
@@ -59,18 +61,35 @@ def configured_league_id(settings: Settings) -> int | None:
     return settings.yahoo_league_id if settings.is_yahoo else settings.espn_league_id
 
 
-def get_active_league(session: Session, settings: Settings | None = None) -> League | None:
-    """The league this app instance is configured for."""
+def get_active_league(
+    session: Session,
+    settings: Settings | None = None,
+    connection: Connection | None = None,
+) -> League | None:
+    """The league the current request is about.
+
+    With a connection, the search never leaves it -- including the fallback,
+    which would otherwise hand one user another user's league the moment their
+    own import had not happened yet.
+    """
     settings = settings or get_settings()
     stmt = select(League).where(League.season == settings.espn_season)
+    if connection is not None:
+        stmt = stmt.where(League.connection_id == connection.id)
+
     league_id = configured_league_id(settings)
     if league_id is not None and not settings.demo_mode:
         stmt = stmt.where(League.espn_league_id == league_id)
     league = session.scalars(stmt.order_by(League.imported_at.desc())).first()
     if league is not None:
         return league
-    # Fall back to whatever has been imported (e.g. the demo league).
-    return session.scalars(select(League).order_by(League.imported_at.desc())).first()
+
+    # Fall back to whatever has been imported (e.g. the demo league), still
+    # within this connection.
+    fallback = select(League)
+    if connection is not None:
+        fallback = fallback.where(League.connection_id == connection.id)
+    return session.scalars(fallback.order_by(League.imported_at.desc())).first()
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +103,7 @@ def import_league(
     settings: Settings | None = None,
     include_players: bool = True,
     include_history: bool = True,
+    connection: Connection | None = None,
 ) -> League:
     settings = settings or get_settings()
     provider = provider or build_provider(settings)
@@ -91,7 +111,7 @@ def import_league(
     ensure_projection_sources(session)
 
     data = provider.league_settings()
-    league = _upsert_league(session, data)
+    league = _upsert_league(session, data, connection)
     session.flush()
 
     _upsert_teams(session, league, provider.teams(), settings)
@@ -113,15 +133,20 @@ def import_league(
     return league
 
 
-def _upsert_league(session: Session, data: dict) -> League:
+def _upsert_league(
+    session: Session, data: dict, connection: Connection | None = None
+) -> League:
+    connection_id = connection.id if connection is not None else None
     league = session.scalars(
         select(League).where(
+            League.connection_id == connection_id,
             League.espn_league_id == data["espn_league_id"],
             League.season == data["season"],
         )
     ).first()
     if league is None:
         league = League(
+            connection_id=connection_id,
             espn_league_id=data["espn_league_id"],
             season=data["season"],
         )
@@ -320,9 +345,7 @@ def import_players(
 
     existing = {
         player.espn_player_id: player
-        for player in session.scalars(
-            select(Player).where(Player.season == league.season)
-        ).all()
+        for player in session.scalars(select(Player).where(*player_filters(league))).all()
     }
     projections = {
         (proj.player_id, proj.source_key): proj
@@ -340,6 +363,7 @@ def import_players(
         player = existing.get(record.espn_player_id)
         if player is None:
             player = Player(
+                connection_id=league.connection_id,
                 season=league.season,
                 espn_player_id=record.espn_player_id,
                 name=record.name,
@@ -389,7 +413,7 @@ def import_players(
 
         imported += 1
 
-    _assign_position_adp(session, league.season)
+    _assign_position_adp(session, league)
     session.commit()
     log.info("Imported %s players for season %s", imported, league.season)
     return imported
@@ -444,7 +468,7 @@ def import_free_agents(
 
     existing = {
         p.espn_player_id: p
-        for p in session.scalars(select(Player).where(Player.season == league.season)).all()
+        for p in session.scalars(select(Player).where(*player_filters(league))).all()
     }
     projections = {
         (proj.player_id, proj.source_key): proj
@@ -460,6 +484,7 @@ def import_free_agents(
         player = existing.get(record.espn_player_id)
         if player is None:
             player = Player(
+                connection_id=league.connection_id,
                 season=league.season,
                 espn_player_id=record.espn_player_id,
                 name=record.name,
@@ -499,9 +524,9 @@ def import_free_agents(
     return len(records)
 
 
-def _assign_position_adp(session: Session, season: int) -> None:
+def _assign_position_adp(session: Session, league: League) -> None:
     """Rank ADP within each position (WR14, RB7, ...)."""
-    players = session.scalars(select(Player).where(Player.season == season)).all()
+    players = session.scalars(select(Player).where(*player_filters(league))).all()
     by_position: dict[str, list[Player]] = {}
     for player in players:
         by_position.setdefault(player.position, []).append(player)

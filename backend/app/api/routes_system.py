@@ -17,7 +17,10 @@ import logging
 import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from ..models import User
+from .deps import require_admin
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -51,7 +54,7 @@ def _git(*args: str) -> tuple[int, str]:
 
 
 @router.get("/version")
-def version() -> dict:
+def version(user: User = Depends(require_admin)) -> dict:
     """What's currently deployed, and whether anything newer exists."""
     if not (REPO_ROOT / ".git").exists():
         return {"git": False, "detail": "Not a git checkout; self-update unavailable."}
@@ -77,8 +80,12 @@ def version() -> dict:
 
 
 @router.post("/update")
-def update() -> dict:
-    """Fast-forward to the latest commit on the current branch."""
+def update(user: User = Depends(require_admin)) -> dict:
+    """Fast-forward to the latest commit on the current branch.
+
+    Operator only: this pulls code and restarts the server, which is not
+    something a hosted install should let any signed-in account do.
+    """
     if not (REPO_ROOT / ".git").exists():
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,

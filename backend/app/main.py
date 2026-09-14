@@ -14,7 +14,9 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .api import (
+    routes_auth,
     routes_config,
+    routes_connections,
     routes_draft,
     routes_league,
     routes_players,
@@ -24,12 +26,13 @@ from .api import (
     routes_team,
     routes_yahoo,
 )
-from .api.deps import settings_dep
+from .api.deps import connection_dep, settings_dep
 from .config import Settings, get_settings
 from .db import get_db, init_db
 from .espn.client import EspnConnectionError
 from .models import League, Player
 from .services.importer import get_active_league
+from .services.scope import player_filters
 from .services.provider import build_espn_client, build_yahoo_client
 from .yahoo.client import YahooConnectionError
 from .yahoo.oauth import YahooAuthError
@@ -75,6 +78,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(routes_auth.router)
+app.include_router(routes_connections.router)
 app.include_router(routes_config.router)
 app.include_router(routes_yahoo.router)
 app.include_router(routes_system.router)
@@ -90,14 +95,15 @@ app.include_router(routes_sim.router)
 def health(
     session: Session = Depends(get_db),
     settings: Settings = Depends(settings_dep),
+    connection=Depends(connection_dep),
 ) -> dict:
     """Configuration + import status. Safe to expose: no secrets are returned."""
-    league = get_active_league(session, settings)
+    league = get_active_league(session, settings, connection)
     player_count = 0
     if league is not None:
         player_count = (
             session.scalar(
-                select(func.count()).select_from(Player).where(Player.season == league.season)
+                select(func.count()).select_from(Player).where(*player_filters(league))
             )
             or 0
         )
@@ -107,6 +113,14 @@ def health(
         "season": settings.espn_season,
         "demo_mode": settings.demo_mode,
         "platform": settings.platform,
+        "multi_user": get_settings().multi_user,
+        "connection": {
+            "id": connection.id,
+            "platform": connection.platform,
+            "label": connection.describe(),
+        }
+        if connection is not None
+        else None,
         "yahoo": {
             "league_id_configured": settings.yahoo_league_id is not None,
             "app_configured": settings.has_yahoo_app,

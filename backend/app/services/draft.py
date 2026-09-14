@@ -17,6 +17,7 @@ from ..config import Settings, get_settings
 from ..engine.draft_math import round_of, pick_in_round, slot_for_pick
 from ..models import DraftPick, DraftSession, League, Player, utcnow
 from .provider import build_espn_client, build_yahoo_client
+from .scope import player_filters
 
 log = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ def record_pick(
     espn_player_id: int,
     overall_pick: int | None = None,
     source: str = "manual",
-    league_season: int | None = None,
+    league: League | None = None,
 ) -> DraftPick:
     """Mark a player as drafted."""
     if any(p.espn_player_id == espn_player_id for p in draft.picks):
@@ -103,8 +104,10 @@ def record_pick(
         raise DraftError(f"Pick {overall} has already been recorded.")
 
     stmt = select(Player).where(Player.espn_player_id == espn_player_id)
-    if league_season is not None:
-        stmt = stmt.where(Player.season == league_season)
+    if league is not None:
+        # Player ids are per-platform and per-connection: the same integer is a
+        # different person in someone else's Yahoo league.
+        stmt = stmt.where(*player_filters(league))
     player = session.scalars(stmt).first()
     if player is None:
         raise DraftError(
@@ -205,7 +208,7 @@ def sync_from_espn(
                 espn_player_id=int(player_id),
                 overall_pick=int(overall),
                 source=platform,
-                league_season=league.season,
+                league=league,
             )
             known_players.add(player_id)
             known_slots.add(overall)

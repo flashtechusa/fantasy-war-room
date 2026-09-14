@@ -145,11 +145,18 @@ class TestYahooRoutes:
 
     def test_disconnecting_clears_the_tokens(self, client):
         from app.db import session_scope
+        from app.services import accounts, connections
         from app.services.yahoo_auth import store_tokens
         from app.yahoo.oauth import YahooTokens
 
+        # Tokens belong to a connection now, not to the installation.
+        client.put("/api/config", json={"platform": "yahoo", "yahoo_league_id": 4242})
         with session_scope() as session:
-            store_tokens(session, YahooTokens("access", "refresh", 9_999_999_999.0, "GUID"))
+            user = accounts.get_or_create_local_user(session)
+            connection = connections.active_connection(session, user)
+            store_tokens(
+                session, connection, YahooTokens("access", "refresh", 9_999_999_999.0, "GUID")
+            )
 
         assert client.get("/api/config").json()["yahoo_connected"] is True
         assert client.delete("/api/yahoo/auth").status_code == 200
