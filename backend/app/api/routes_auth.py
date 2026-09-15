@@ -77,6 +77,21 @@ def _set_cookie(response: Response, token: str, settings: Settings) -> None:
     )
 
 
+@router.get("/config")
+def read_auth_config() -> dict:
+    """What the sign-in screen needs before anyone is signed in.
+
+    Public by necessity: a browser with no session still has to know whether to
+    show a login form at all, and whether "create an account" leads anywhere.
+    Nothing here is account-specific.
+    """
+    settings = get_settings()
+    return {
+        "multi_user": settings.multi_user,
+        "allow_registration": settings.multi_user and settings.allow_registration,
+    }
+
+
 @router.get("/me")
 def read_me(
     session: Session = Depends(get_db),

@@ -626,6 +626,9 @@ export const api = {
   // A single-user install answers `me` with its implicit local account and
   // never asks for a password; a hosted one requires the session cookie.
   me: () => request<AuthState>('/api/auth/me'),
+  // Public: the sign-in screen has to render before anyone is signed in.
+  authConfig: () =>
+    request<{ multi_user: boolean; allow_registration: boolean }>('/api/auth/config'),
   login: (email: string, password: string) =>
     request<{ user: AccountInfo; connections: ConnectionInfo[] }>('/api/auth/login', {
       method: 'POST',

@@ -26,12 +26,13 @@ from .api import (
     routes_team,
     routes_yahoo,
 )
-from .api.deps import connection_dep, settings_dep
+from .api.deps import optional_user, settings_dep
 from .config import Settings, get_settings
 from .db import get_db, init_db
 from .espn.client import EspnConnectionError
 from .models import League, Player
 from .services.importer import get_active_league
+from .services.runtime_config import effective_settings
 from .services.scope import player_filters
 from .services.provider import build_espn_client, build_yahoo_client
 from .yahoo.client import YahooConnectionError
@@ -94,10 +95,30 @@ app.include_router(routes_sim.router)
 @app.get("/api/health", tags=["system"])
 def health(
     session: Session = Depends(get_db),
-    settings: Settings = Depends(settings_dep),
-    connection=Depends(connection_dep),
+    user=Depends(optional_user),
 ) -> dict:
-    """Configuration + import status. Safe to expose: no secrets are returned."""
+    """Liveness, plus import status for whoever is asking.
+
+    Deliberately answers an anonymous caller: container health checks and
+    deploy platforms probe this without a cookie, and a 401 here reads to them
+    as a failed release. What an anonymous caller gets is liveness only -- no
+    league, no connection, nothing about anyone's account.
+    """
+    if user is None:
+        return {
+            "status": "ok",
+            "multi_user": True,
+            "authenticated": False,
+            "league_imported": False,
+        }
+
+    from .services import connections as connection_service
+
+    connection = connection_service.active_connection(session, user)
+    if connection is None:
+        connection = connection_service.ensure_default_connection(session, user)
+        session.commit()
+    settings = effective_settings(session, get_settings(), connection)
     league = get_active_league(session, settings, connection)
     player_count = 0
     if league is not None:
@@ -110,6 +131,7 @@ def health(
 
     return {
         "status": "ok",
+        "authenticated": True,
         "season": settings.espn_season,
         "demo_mode": settings.demo_mode,
         "platform": settings.platform,

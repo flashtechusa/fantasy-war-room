@@ -225,6 +225,14 @@ Passwords are hashed with scrypt from the standard library; sessions are stored
 server-side with only a hash of the cookie, so signing out really ends a session
 and a stolen database does not hand over live logins.
 
+**Signing in the first time.** There is no separate login URL — the app's own
+address is the login screen. Deploy with `FWR_MULTI_USER=true`, open the site,
+and the sign-in screen appears in place of the board. Press **Create an
+account**; the first account to register becomes the operator. Only then set
+`FWR_ALLOW_REGISTRATION=false` if you want a closed beta — there is no other way
+to create the first account, so turning registration off before it exists locks
+you out of your own server.
+
 **Upgrading an existing install:** nothing to do. The first start migrates the
 database, moves your credentials out of the shared config table onto a
 connection, and attaches your league and players to it. It is idempotent, so a

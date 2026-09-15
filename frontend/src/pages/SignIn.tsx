@@ -10,14 +10,14 @@
 import { useState } from 'react'
 import { api } from '../api'
 import { Banner, Card } from '../components'
+import { useAsync } from '../useAsync'
 
-export default function SignIn({
-  allowRegistration,
-  onSignedIn,
-}: {
-  allowRegistration: boolean
-  onSignedIn: () => void
-}) {
+export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
+  // Whether this installation is taking new accounts is a property of the
+  // server, and a browser with no session still has to know it -- otherwise a
+  // closed beta shows a "create an account" button that only ever 403s.
+  const config = useAsync(() => api.authConfig(), [])
+  const allowRegistration = config.data?.allow_registration ?? false
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')

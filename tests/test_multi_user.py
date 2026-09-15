@@ -80,8 +80,30 @@ class TestAuthentication:
 
     def test_the_api_is_closed_without_a_session(self, hosted_client):
         hosted_client.cookies.clear()
-        for path in ("/api/auth/me", "/api/connections", "/api/league", "/api/health"):
+        for path in ("/api/auth/me", "/api/connections", "/api/league", "/api/team"):
             assert hosted_client.get(path).status_code == 401, path
+
+    def test_the_health_probe_answers_anonymously_but_says_nothing(self, hosted_client):
+        """Deploy platforms probe this without a cookie; a 401 fails the release."""
+        _register(hosted_client, "health@example.com")
+        hosted_client.post("/api/connections", json={"platform": "demo", "season": 2026})
+        hosted_client.post("/api/league/import")
+        hosted_client.cookies.clear()
+
+        response = hosted_client.get("/api/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+        assert body["authenticated"] is False
+        # Liveness only: nothing about anyone's league.
+        assert body.get("league") is None
+        assert body.get("connection") is None
+
+    def test_the_sign_in_screen_can_ask_what_is_allowed(self, hosted_client):
+        hosted_client.cookies.clear()
+        body = hosted_client.get("/api/auth/config").json()
+        assert body["multi_user"] is True
+        assert body["allow_registration"] is True
 
     def test_a_bad_password_is_rejected_without_saying_which_half_was_wrong(
         self, hosted_client

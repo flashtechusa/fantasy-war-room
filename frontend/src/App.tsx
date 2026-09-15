@@ -52,7 +52,7 @@ export default function App() {
   // failure and should not be papered over with a login form.
   if (!auth.data && auth.error) {
     if (/sign in/i.test(auth.error)) {
-      return <SignIn allowRegistration onSignedIn={reloadAll} />
+      return <SignIn onSignedIn={reloadAll} />
     }
     return (
       <div className="app">

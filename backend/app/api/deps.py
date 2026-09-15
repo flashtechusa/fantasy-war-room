@@ -21,6 +21,7 @@ from ..engine.draft_math import DraftPosition
 from ..engine.valuation import BoardResult, ValuationEngine
 from ..models import Connection, DraftSession, League, User
 from ..services import accounts as account_service
+from ..services.accounts import SESSION_COOKIE
 from ..services import connections as connection_service
 from ..services import draft as draft_service
 from ..services.board import LeagueNotImported, build_board, build_engine
@@ -52,6 +53,26 @@ def current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Sign in to continue.",
         )
+    session.commit()
+    return user
+
+
+def optional_user(
+    request: Request,
+    session: Session = Depends(get_db),
+) -> User | None:
+    """The signed-in user, or None -- without rejecting the request.
+
+    For endpoints that must answer an anonymous caller: a container health
+    probe has no cookie, and a deploy platform that gets a 401 from its health
+    check marks the release failed and rolls it back.
+    """
+    settings = get_settings()
+    if not settings.multi_user:
+        user = account_service.get_or_create_local_user(session)
+        session.commit()
+        return user
+    user = account_service.user_for_token(session, request.cookies.get(SESSION_COOKIE, ""))
     session.commit()
     return user
 
