@@ -179,9 +179,9 @@ Yahoo league instead. Two differences are worth knowing before you start:
   Client ID and Secret; the League tab walks through the handshake, and the
   token refreshes itself afterwards.
 * **Yahoo publishes no projections at all.** The player pool, rosters,
-  ownership and ADP come from Yahoo; the projections come from ESPN's public
-  feed (no credentials required) and are re-scored under your Yahoo league's own
-  rules. A FantasyPros key improves coverage further.
+  ownership and ADP come from Yahoo; the projections come from a projection
+  source instead. See below — the same sources, and the same controls, on
+  either platform.
 
 | Variable | Required | Description |
 | --- | --- | --- |
@@ -194,6 +194,26 @@ Yahoo league instead. Two differences are worth knowing before you start:
 **[docs/yahoo.md](docs/yahoo.md)** covers the whole setup, including what to put
 on Yahoo's API access application form and how Yahoo's scoring categories are
 translated onto the engine's stat vocabulary.
+
+### Projections
+
+Whichever platform a league is on, the rankings run on projection **sources**,
+and the **Projections** card on the League screen is the same on both. Every
+source is stored as raw stat lines and re-scored under that league's own rules,
+which is what makes them comparable, interchangeable and blendable.
+
+| Source | Key needed | Notes |
+| --- | --- | --- |
+| The platform's own | none | ESPN leagues get these from the league import; Yahoo publishes none |
+| ESPN (public) | none | ESPN's projections for a default league — what a Yahoo league starts on |
+| Sleeper | none | Free and keyless. Their projections endpoint is undocumented, so the parser is defensive |
+| FantasyPros | your own | Free keys truncate each position to roughly ten players |
+
+Each row shows how many of your players it actually projects, which is the fact
+that matters: an enabled source covering 40 of 600 players is not the second
+opinion it appears to be. Turn a source off to rank on the others; give one more
+weight to lean on it. Turn them *all* off and the app says so rather than
+quietly rebuilding the board from one you just disabled.
 
 ### Accounts and connected leagues
 
@@ -675,7 +695,8 @@ backend/app/
     constants.py       Yahoo -> ESPN stat id and slot translation
   projections/
     espn_public.py     ESPN's credential-free projections (what Yahoo lacks)
-    fantasypros.py     optional second source, bring your own key
+    sleeper.py         free, keyless projections; undocumented endpoint
+    fantasypros.py     optional source, bring your own key
     matching.py        conservative cross-provider player matching
   engine/
     scoring.py         apply league scoring rules to raw stat lines
@@ -697,7 +718,7 @@ frontend/src/
   pages/               LeagueSettings, DraftBoard, LiveDraft, MyTeam, Simulator
   components.tsx       player cards, score bars, bottom sheet
   styles.css           mobile-first design system
-tests/                 590 tests, no network or credentials required
+tests/                 614 tests, no network or credentials required
 ```
 
 ### Credits

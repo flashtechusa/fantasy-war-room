@@ -11,7 +11,12 @@
  */
 
 import { useEffect, useState } from 'react'
-import { api, type ConnectionInfo, type YahooLeagueOption } from '../api'
+import {
+  api,
+  type ConnectionInfo,
+  type ProjectionImportReport,
+  type YahooLeagueOption,
+} from '../api'
 import { Banner, Card, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -679,173 +684,200 @@ function YahooConnectionForm({ onSaved }: { onSaved: () => void }) {
 }
 
 /**
- * ESPN's public projections.
+ * Which projections the rankings run on.
  *
- * Yahoo publishes no projections at all -- not one projected stat for anybody
- * -- so a Yahoo league has nothing to rank until this runs. It needs no
- * credentials: ESPN publishes projections for a default league, and their raw
- * stat lines get re-scored under the Yahoo league's own rules like every other
- * source.
+ * The engine re-scores every source's raw stat lines under this league's own
+ * rules, so sources are interchangeable and blendable -- and the same list
+ * works whether the league is on ESPN or Yahoo. What differs is only what is
+ * available: an ESPN league gets ESPN's own numbers from the import, a Yahoo
+ * league starts from ESPN's public feed because Yahoo publishes none.
+ *
+ * Coverage sits next to each source because "enabled" is not the useful fact.
+ * A source projecting 40 of 600 players is not a second opinion, and only the
+ * count makes that visible.
  */
-function PublicProjectionsCard({ onImported }: { onImported: () => void }) {
-  const [busy, setBusy] = useState(false)
+function ProjectionsCard({ onChanged }: { onChanged: () => void }) {
+  const sources = useAsync(() => api.projectionSources().catch(() => null), [])
+  const config = useAsync(() => api.config(), [])
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null)
 
-  async function run() {
-    setBusy(true)
+  const rows = sources.data?.sources ?? []
+  const poolSize = sources.data?.pool_size ?? 0
+  const keyStored = Boolean(config.data?.fantasypros_key_set)
+
+  async function run(label: string, action: () => Promise<unknown>) {
+    setBusy(label)
     setNote(null)
     try {
-      const report = await api.importPublicProjections()
-      const base = `Matched ${report.matched} of ${report.received} players — ${Math.round(
-        report.coverage * 100,
-      )}% of your player pool.`
-      setNote({ ok: report.enabled, text: report.warning ? `${base} ${report.warning}` : base })
-      onImported()
+      await action()
+      sources.reload()
+      onChanged()
     } catch (error) {
       setNote({ ok: false, text: (error as Error).message })
     } finally {
-      setBusy(false)
+      setBusy(null)
     }
   }
 
+  function report(result: ProjectionImportReport) {
+    const base =
+      `Matched ${result.matched} of ${result.received} players` +
+      (poolSize ? ` — ${Math.round(result.coverage * 100)}% of your pool.` : '.')
+    setNote({
+      ok: result.enabled,
+      text: result.warning ? `${base} ${result.warning}` : base,
+    })
+  }
+
+  const IMPORTS = [
+    {
+      key: 'espn_public',
+      label: 'ESPN',
+      run: async () => report(await api.importPublicProjections()),
+    },
+    {
+      key: 'sleeper',
+      label: 'Sleeper',
+      run: async () => report(await api.importSleeper()),
+    },
+  ]
+
   return (
-    <Card title="Projections for this league">
+    <Card title="Projections">
       <div className="small muted" style={{ marginBottom: 10 }}>
-        Yahoo publishes ownership, ADP and rosters but no projections, so the rankings run
-        on ESPN's public projections instead — re-scored under your Yahoo league's rules.
-        This runs automatically on import; use the button after ESPN updates its numbers.
+        Every source is re-scored under your league's own rules, so they are comparable
+        and blendable. Turn one off to rank on the others; give one more weight to lean
+        on it.
       </div>
-      <button className="btn primary block" onClick={run} disabled={busy}>
-        {busy ? 'Importing…' : 'Refresh projections'}
-      </button>
+
+      {rows.length === 0 && (
+        <div className="tiny faint" style={{ marginBottom: 10 }}>
+          No projections loaded yet. Pull one below.
+        </div>
+      )}
+
+      {rows.map((source) => (
+        <div
+          key={source.key}
+          className="row between"
+          style={{ gap: 8, padding: '7px 0', borderBottom: '1px solid var(--border)' }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <div className="small">
+              <strong>{source.label}</strong>
+            </div>
+            <div className="tiny faint">
+              {source.players_covered
+                ? `${source.players_covered} players${
+                    poolSize ? ` · ${Math.round(source.coverage * 100)}% of the pool` : ''
+                  }`
+                : 'no data yet'}
+              {source.enabled ? '' : ' · off'}
+            </div>
+          </div>
+          <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+            <input
+              type="number"
+              step="0.5"
+              min="0"
+              max="10"
+              aria-label={`${source.label} weight`}
+              defaultValue={source.weight}
+              disabled={busy !== null || !source.enabled}
+              style={{ width: 62, margin: 0, padding: '5px 6px' }}
+              onBlur={(event) =>
+                Number(event.target.value) !== source.weight &&
+                run(source.key, () =>
+                  api.setProjectionSource(source.key, {
+                    weight: Number(event.target.value),
+                  }),
+                )
+              }
+            />
+            <button
+              className={`btn sm ${source.enabled ? 'primary' : ''}`}
+              disabled={busy !== null}
+              onClick={() =>
+                run(source.key, () =>
+                  api.setProjectionSource(source.key, { enabled: !source.enabled }),
+                )
+              }
+            >
+              {source.enabled ? 'On' : 'Off'}
+            </button>
+          </div>
+        </div>
+      ))}
+
+      <div className="row" style={{ gap: 8, marginTop: 10 }}>
+        {IMPORTS.map((entry) => (
+          <button
+            key={entry.key}
+            className="btn block"
+            disabled={busy !== null}
+            onClick={() => run(entry.key, entry.run)}
+          >
+            {busy === entry.key ? 'Importing…' : `Pull ${entry.label}`}
+          </button>
+        ))}
+      </div>
+
+      <details style={{ marginTop: 10 }}>
+        <summary className="small muted" style={{ cursor: 'pointer' }}>
+          FantasyPros {keyStored ? '(key stored)' : '(needs your own key)'}
+        </summary>
+        <div className="tiny faint" style={{ margin: '8px 0' }}>
+          Bring your own key from api.fantasypros.com. Free keys allow 50 requests a day
+          and an import uses six; they also truncate each position to about ten players,
+          which is why a free-tier import often lands under the coverage gate. The key is
+          stored on this server and never sent back to the browser.
+        </div>
+        <input
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={keyStored ? '••••••••••••  (stored)' : 'Paste your FantasyPros API key'}
+          value={key}
+          onChange={(event) => setKey(event.target.value)}
+          style={{ marginBottom: 8 }}
+        />
+        <div className="row" style={{ gap: 8 }}>
+          <button
+            className="btn block"
+            disabled={busy !== null || !key.trim()}
+            onClick={() =>
+              run('fp-key', async () => {
+                await api.saveConfig({ fantasypros_api_key: key.trim() })
+                setKey('')
+                // Confirm against the server rather than assuming: a save that
+                // is accepted but not stored is exactly the failure this had.
+                const after = await api.config()
+                config.reload()
+                if (!after.fantasypros_key_set) {
+                  throw new Error('The server did not store the key. Nothing was saved.')
+                }
+                setNote({ ok: true, text: 'Key saved. Pull FantasyPros to use it.' })
+              })
+            }
+          >
+            {busy === 'fp-key' ? 'Saving…' : 'Save key'}
+          </button>
+          <button
+            className="btn block"
+            disabled={busy !== null || !keyStored}
+            onClick={() => run('fantasypros', async () => report(await api.importFantasyPros()))}
+          >
+            {busy === 'fantasypros' ? 'Importing…' : 'Pull FantasyPros'}
+          </button>
+        </div>
+      </details>
+
       {note && (
         <div style={{ marginTop: 10 }}>
           <Banner kind={note.ok ? 'info' : 'error'}>{note.text}</Banner>
         </div>
-      )}
-    </Card>
-  )
-}
-
-/**
- * A second projection source, so everything does not rest on ESPN's numbers.
- *
- * Bring your own key: nothing is bundled, and the source stays inert until one
- * is entered. FantasyPros issue free keys for personal, non-commercial use, so
- * whether a given install may use this is a question for whoever holds the key.
- */
-function FantasyProsCard({ onImported }: { onImported: () => void }) {
-  const config = useAsync(() => api.config(), [])
-  const [key, setKey] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [importing, setImporting] = useState(false)
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
-  const [covered, setCovered] = useState<string[]>([])
-
-  const stored = Boolean(config.data?.fantasypros_key_set)
-
-  async function saveKey() {
-    setSaving(true)
-    setResult(null)
-    try {
-      await api.saveConfig({ fantasypros_api_key: key.trim() })
-      setKey('')
-      // Confirm against the server rather than assuming: a save that is
-      // accepted but not stored is exactly the failure this had.
-      const after = await api.config()
-      if (after.fantasypros_key_set) {
-        setResult({ ok: true, text: 'Key saved. Import to pull projections.' })
-      } else {
-        setResult({ ok: false, text: 'The server did not store the key. Nothing was saved.' })
-      }
-      config.reload()
-    } catch (error) {
-      setResult({ ok: false, text: (error as Error).message })
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  async function runImport() {
-    setImporting(true)
-    setResult(null)
-    try {
-      const report = await api.importFantasyPros()
-      const missed = report.unmatched_count + report.ambiguous_count
-      const base =
-        `Matched ${report.matched} of ${report.received} players` +
-        (missed ? `, ${missed} skipped` : '') +
-        ` — ${Math.round(report.coverage * 100)}% of your player pool.`
-      setCovered(report.matched_sample ?? [])
-      setResult({
-        // Partial coverage is not a success: the source is stored but not used.
-        ok: report.enabled,
-        text: report.warning ? `${base} ${report.warning}` : base,
-      })
-      onImported()
-    } catch (error) {
-      setResult({ ok: false, text: (error as Error).message })
-    } finally {
-      setImporting(false)
-    }
-  }
-
-  return (
-    <Card title="FantasyPros projections (optional)">
-      <div className="small muted" style={{ marginBottom: 10 }}>
-        A second opinion alongside ESPN's numbers. Their stat lines get re-scored under
-        your league's rules the same way, so this changes the inputs, not the method.
-      </div>
-
-      <label className="tiny faint">
-        API key {stored && <span className="muted">(stored — leave blank to keep)</span>}
-      </label>
-      <input
-        type="password"
-        autoComplete="off"
-        spellCheck={false}
-        placeholder={stored ? '••••••••••••  (stored)' : 'Paste your FantasyPros API key'}
-        value={key}
-        onChange={(e) => setKey(e.target.value)}
-        style={{ marginBottom: 10 }}
-      />
-      <div className="row" style={{ gap: 8 }}>
-        <button className="btn block" onClick={saveKey} disabled={saving || !key.trim()}>
-          {saving ? 'Saving…' : 'Save key'}
-        </button>
-        <button
-          className="btn primary block"
-          onClick={runImport}
-          disabled={importing || !stored}
-        >
-          {importing ? 'Importing…' : 'Import projections'}
-        </button>
-      </div>
-
-      <div className="tiny faint" style={{ marginTop: 8 }}>
-        Get a key at api.fantasypros.com. Free keys allow 50 requests a day and an import
-        uses six. The key is stored locally and never sent back to the browser.
-      </div>
-
-      {result && (
-        <div style={{ marginTop: 10 }}>
-          <Banner kind={result.ok ? 'info' : 'error'}>{result.text}</Banner>
-        </div>
-      )}
-
-      {covered.length > 0 && (
-        <details style={{ marginTop: 10 }}>
-          <summary className="small muted" style={{ cursor: 'pointer' }}>
-            Which {covered.length} players FantasyPros covered
-          </summary>
-          <div className="row wrap" style={{ gap: 5, marginTop: 8 }}>
-            {covered.map((name) => (
-              <span key={name} className="pill">
-                {name}
-              </span>
-            ))}
-          </div>
-        </details>
       )}
     </Card>
   )
@@ -1089,11 +1121,7 @@ export default function LeagueSettings({ onChange }: { onChange?: () => void }) 
     <>
       {message && <Banner kind={message.kind === 'error' ? 'error' : 'info'}>{message.text}</Banner>}
 
-      <FantasyProsCard onImported={() => onChange?.()} />
-
-      {config.data?.platform === 'yahoo' && (
-        <PublicProjectionsCard onImported={() => onChange?.()} />
-      )}
+      <ProjectionsCard onChanged={() => onChange?.()} />
 
       <ConnectedLeagues
         onChanged={() => {

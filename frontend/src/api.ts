@@ -598,6 +598,22 @@ export interface YahooLeagueOption {
   url: string
 }
 
+export interface ProjectionSourceRow {
+  key: string
+  label: string
+  weight: number
+  enabled: boolean
+  players_covered: number
+  coverage: number
+  updated_at?: string
+}
+
+export interface ProjectionSourcesResponse {
+  pool_size: number
+  needs_key: Record<string, boolean>
+  sources: ProjectionSourceRow[]
+}
+
 export interface ProjectionImportReport {
   source: string
   received: number
@@ -798,6 +814,19 @@ export const api = {
   // Yahoo publishes none.
   importPublicProjections: () =>
     request<ProjectionImportReport>('/api/league/projections/espn-public', { method: 'POST' }),
+
+  // Sleeper is free and keyless, so it is the one second opinion every league
+  // can have, on either platform.
+  importSleeper: () =>
+    request<ProjectionImportReport>('/api/league/projections/sleeper', { method: 'POST' }),
+
+  projectionSources: () =>
+    request<ProjectionSourcesResponse>('/api/league/projection-sources'),
+  setProjectionSource: (key: string, body: { enabled?: boolean; weight?: number }) =>
+    request<ProjectionSourceRow>(`/api/league/projection-sources/${key}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
 
   lineup: (week?: number) =>
     request<LineupResponse>(`/api/season/lineup${week ? `?week=${week}` : ''}`),

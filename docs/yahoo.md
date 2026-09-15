@@ -118,10 +118,13 @@ handshake still has to happen in the browser once.
 
 ## 4. What is different once it is running
 
-**Projections come from ESPN.** The League screen shows the match rate. Players
-ESPN's public feed did not cover have no projection and sort to the bottom;
-names that differ between platforms are the usual cause, and adding a
-FantasyPros key fills most of the gap.
+**Projections come from a source, not from Yahoo.** The **Projections** card on
+the League screen is identical to an ESPN league's: pull ESPN's public feed,
+Sleeper (free, no key) or FantasyPros (your own key), switch any of them on or
+off, and weight them. Each row shows how many of your players it covers.
+Players no enabled source covered have no projection and sort to the bottom;
+names that differ between platforms are the usual cause, and a second source
+fills most of the gap.
 
 **Scoring is translated, and the translation is shown.** The engine scores raw
 stat lines by ESPN stat id, so Yahoo's categories are mapped onto them at import

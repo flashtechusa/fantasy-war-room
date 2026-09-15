@@ -27,6 +27,8 @@ from ..projections.fantasypros import (
     FantasyProsPlayer,
 )
 from ..projections.matching import Candidate, PlayerMatcher
+from ..projections.sleeper import SOURCE_KEY as SLEEPER_SOURCE_KEY
+from ..projections.sleeper import fetch_projections as fetch_sleeper
 from .scope import player_filters
 
 log = logging.getLogger(__name__)
@@ -155,7 +157,40 @@ def import_espn_public(
     source = ensure_source(session, PUBLIC_SOURCE_KEY, "ESPN projections (public)", weight)
     players = fetch_projections(league.season, limit=limit)
     report = store_projections(session, league, players, PUBLIC_SOURCE_KEY)
+    _finish_source_import(session, league, source, report)
+    return report
 
+
+def import_sleeper(
+    session: Session,
+    league: League,
+    *,
+    weight: float = 1.0,
+    week: int | None = None,
+) -> dict:
+    """Pull Sleeper's projections and attach them by name.
+
+    Free and keyless, so this is the second opinion every league can have --
+    whichever platform the league itself lives on. Like every other source, the
+    raw stat lines are re-scored under this league's own rules.
+    """
+    source = ensure_source(session, SLEEPER_SOURCE_KEY, "Sleeper projections", weight)
+    players = fetch_sleeper(league.season, week=week)
+    report = store_projections(session, league, players, SLEEPER_SOURCE_KEY)
+    _finish_source_import(session, league, source, report)
+    return report
+
+
+def _finish_source_import(
+    session: Session, league: League, source: ProjectionSource, report: dict
+) -> dict:
+    """Coverage bookkeeping shared by every optional source.
+
+    The gate exists so a source covering only the top of each position cannot
+    quietly skew a blend. It is not applied when this is the only source there
+    is: a partial projection set beats an empty board, and the gap is reported
+    instead.
+    """
     pool_size = session.scalar(
         select(func.count(Player.id)).where(*player_filters(league))
     ) or 0
@@ -163,14 +198,14 @@ def import_espn_public(
     report["pool_size"] = pool_size
     report["coverage"] = round(coverage, 3)
 
-    sole_source = not _has_other_projections(session, league, PUBLIC_SOURCE_KEY)
+    sole_source = not _has_other_projections(session, league, source.key)
     if coverage < MIN_COVERAGE and not sole_source:
         source.enabled = False
         report["enabled"] = False
         report["warning"] = (
             f"Only {report['matched']} of {pool_size} players matched ({coverage:.0%}). "
             "Blending a partial source distorts the rankings, so it has been left "
-            "switched off."
+            "switched off. You can turn it on anyway from the Projections card."
         )
     else:
         source.enabled = True
@@ -180,19 +215,60 @@ def import_espn_public(
                 f"{report['matched']} of {pool_size} players matched ({coverage:.0%}). "
                 "This is the only projection source available for this league, so it is "
                 "switched on -- but players it did not cover have no projection and will "
-                "rank at the bottom. Names that differ between platforms are the usual "
-                "cause; adding FantasyPros fills most of the gap."
+                "rank at the bottom."
             )
 
     session.flush()
     log.info(
-        "ESPN public projections: %s received, %s matched, %.0f%% coverage, enabled=%s",
+        "%s projections: %s received, %s matched, %.0f%% coverage, enabled=%s",
+        source.key,
         report["received"],
         report["matched"],
         coverage * 100,
         report["enabled"],
     )
     return report
+
+
+def set_source_state(
+    session: Session,
+    key: str,
+    *,
+    enabled: bool | None = None,
+    weight: float | None = None,
+) -> ProjectionSource:
+    """Turn a projection source on or off, or change how much it counts.
+
+    An explicit choice here overrides the automatic coverage gate: the gate is
+    a default, not a veto, and someone who wants to rank on one source alone is
+    allowed to.
+    """
+    source = session.scalars(
+        select(ProjectionSource).where(ProjectionSource.key == key)
+    ).first()
+    if source is None:
+        raise ValueError(f"No projection source named {key!r}.")
+    if enabled is not None:
+        source.enabled = bool(enabled)
+    if weight is not None:
+        source.weight = max(0.0, float(weight))
+    session.flush()
+    return source
+
+
+def source_coverage(session: Session, league: League) -> dict[str, int]:
+    """{source key: players it projects} for this league's pool.
+
+    What the Projections card shows: "ESPN 612, Sleeper 588" answers "is this
+    source actually doing anything?" in a way an on/off switch cannot.
+    """
+    rows = session.execute(
+        select(PlayerProjection.source_key, func.count(PlayerProjection.id))
+        .join(Player, Player.id == PlayerProjection.player_id)
+        .where(*player_filters(league))
+        .group_by(PlayerProjection.source_key)
+    ).all()
+    return {key: int(count) for key, count in rows}
 
 
 def import_fantasypros(
@@ -213,35 +289,12 @@ def import_fantasypros(
     client = FantasyProsClient(api_key=api_key, season=league.season)
     players = client.projections(week=week)
     report = store_projections(session, league, players, SOURCE_KEY)
+    _finish_source_import(session, league, source, report)
 
-    pool_size = session.scalar(
-        select(func.count(Player.id)).where(*player_filters(league))
-    ) or 0
-    coverage = (report["matched"] / pool_size) if pool_size else 0.0
-    report["pool_size"] = pool_size
-    report["coverage"] = round(coverage, 3)
-
-    if coverage < MIN_COVERAGE:
-        source.enabled = False
-        report["enabled"] = False
-        report["warning"] = (
-            f"Only {report['matched']} of {pool_size} players were covered "
-            f"({coverage:.0%}). Blending a partial source would value the top of "
-            "each position on two providers and everyone else on one, which "
-            "distorts the rankings, so it has been left switched off. "
-            "FantasyPros' free tier truncates responses; a paid tier returns "
-            "full ones."
+    if report.get("warning") and not report["enabled"]:
+        # Worth naming the usual cause: their free tier truncates each position
+        # to roughly ten players, which lands well under the coverage gate.
+        report["warning"] += (
+            " FantasyPros' free tier truncates responses; a paid tier returns full ones."
         )
-    else:
-        source.enabled = True
-        report["enabled"] = True
-
-    session.flush()
-    log.info(
-        "FantasyPros import: %s received, %s matched, %.0f%% coverage, enabled=%s",
-        report["received"],
-        report["matched"],
-        coverage * 100,
-        report["enabled"],
-    )
     return report

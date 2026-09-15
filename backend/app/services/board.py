@@ -117,13 +117,18 @@ def build_engine(session: Session, league: League) -> ValuationEngine:
     if _cache is not None and _cache.key == key:
         return _cache.engine
 
-    weights = {
-        source.key: source.weight
-        for source in session.scalars(
-            select(ProjectionSource).where(ProjectionSource.enabled.is_(True))
-        ).all()
-    }
+    registered = session.scalars(select(ProjectionSource)).all()
+    weights = {source.key: source.weight for source in registered if source.enabled}
     if not weights:
+        if registered:
+            # Every source was switched off deliberately. Falling back to one of
+            # them anyway would rebuild the board from data the user just told
+            # us not to use, and look entirely normal doing it.
+            raise LeagueNotImported(
+                "Every projection source is switched off, so there is nothing to rank "
+                "players on. Turn one back on under Projections on the League screen."
+            )
+        # No sources registered at all: a database that predates the registry.
         weights = {"espn": 1.0, "demo": 1.0}
 
     players = session.scalars(select(Player).where(*player_filters(league))).all()

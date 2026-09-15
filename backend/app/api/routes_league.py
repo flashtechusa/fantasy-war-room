@@ -16,6 +16,7 @@ from ..espn.client import EspnConnectionError
 from ..models import HistoricalDraftPick, League, Player, ProjectionSource
 from ..projections.espn_public import EspnPublicError
 from ..projections.fantasypros import FantasyProsError
+from ..projections.sleeper import SleeperError
 from ..services import board as board_service
 from ..services import projections as projection_service
 from ..services.importer import import_league, import_players
@@ -136,21 +137,102 @@ def read_history(
 
 
 @router.get("/projection-sources")
-def read_projection_sources(session: Session = Depends(get_db)) -> dict:
-    """Registered projection providers and their blend weights."""
+def read_projection_sources(
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """Projection providers, what each covers, and how much it counts.
+
+    Coverage is the number that matters: an enabled source projecting 40 of 600
+    players is not the second opinion it appears to be, and only a count makes
+    that visible.
+    """
+    coverage = projection_service.source_coverage(session, league)
+    pool_size = session.scalar(
+        select(func.count()).select_from(Player).where(*player_filters(league))
+    ) or 0
     sources = session.scalars(select(ProjectionSource)).all()
+
     return {
+        "pool_size": pool_size,
+        "needs_key": {"fantasypros": not settings.fantasypros_api_key},
         "sources": [
             {
                 "key": source.key,
                 "label": source.label,
                 "weight": source.weight,
                 "enabled": source.enabled,
+                "players_covered": coverage.get(source.key, 0),
+                "coverage": round(coverage.get(source.key, 0) / pool_size, 3)
+                if pool_size
+                else 0.0,
                 "updated_at": source.updated_at,
             }
             for source in sources
-        ]
+            # A source with no data and no way to get any is noise on the
+            # screen; `demo` only means anything in demo mode.
+            if coverage.get(source.key) or source.key != "demo"
+        ],
     }
+
+
+class ProjectionSourceUpdate(BaseModel):
+    enabled: bool | None = None
+    weight: float | None = Field(default=None, ge=0.0, le=10.0)
+
+    model_config = {"extra": "forbid"}
+
+
+@router.patch("/projection-sources/{key}")
+def update_projection_source(
+    key: str,
+    payload: ProjectionSourceUpdate,
+    session: Session = Depends(get_db),
+) -> dict:
+    """Turn a source on or off, or change how much it counts in the blend.
+
+    An explicit choice here beats the automatic coverage gate. That gate is a
+    sensible default for an import nobody asked about, not a veto on what
+    someone deliberately wants to rank on.
+    """
+    try:
+        source = projection_service.set_source_state(
+            session, key, enabled=payload.enabled, weight=payload.weight
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    session.commit()
+    board_service.clear_cache()
+    return {
+        "key": source.key,
+        "label": source.label,
+        "enabled": source.enabled,
+        "weight": source.weight,
+    }
+
+
+@router.post("/projections/sleeper")
+def import_sleeper_projections(
+    week: int | None = Query(None, ge=1, le=18, description="Omit for season totals"),
+    weight: float = Query(1.0, ge=0.0, le=10.0),
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+) -> dict:
+    """Pull Sleeper's projections. Free, no key, works on any platform."""
+    try:
+        report = projection_service.import_sleeper(
+            session, league, weight=weight, week=week
+        )
+    except SleeperError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)
+        ) from exc
+
+    session.commit()
+    board_service.clear_cache()
+    return report
 
 
 @router.post("/projections/fantasypros")
