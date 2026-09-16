@@ -10,11 +10,16 @@ Codespace, a tablet, a phone -- with no file editing at all.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..models import AppConfig
+
+if TYPE_CHECKING:      # Imported lazily at runtime to keep this module import-light.
+    from ..models import UserEspnConfig
 
 #: Keys that may be set at runtime, mapped to the Settings field they override.
 OVERRIDABLE = {

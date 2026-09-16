@@ -132,6 +132,77 @@ def build_waiver_body(
     return body
 
 
+def build_drop_body(
+    *, team_id: int, swid: str | None, scoring_period_id: int, drop: WaiverPlayer
+) -> dict:
+    """The ESPN transaction for dropping one of my players and adding nobody.
+
+    Same envelope as an add/drop with the ADD item left out. This is what ESPN
+    needs when a healed player has to come off IR and the roster is full: the drop
+    opens the spot, and only then will ESPN accept the IR-to-bench move.
+    """
+    return {
+        "isLeagueManager": False,
+        "teamId": team_id,
+        "type": "FREEAGENT",
+        "memberId": (swid or "").strip() or None,
+        "scoringPeriodId": scoring_period_id,
+        "executionType": "EXECUTE",
+        "items": [
+            {
+                "playerId": drop.espn_player_id, "type": "DROP",
+                "fromTeamId": team_id, "toTeamId": 0,
+            }
+        ],
+    }
+
+
+def send_drop(
+    *,
+    season: int,
+    league_id: int,
+    team_id: int,
+    swid: str | None,
+    espn_s2: str | None,
+    scoring_period_id: int,
+    drop: WaiverPlayer,
+    transport: httpx.BaseTransport | None = None,
+) -> WaiverResult:
+    """Drop one player, adding nobody. Irreversible -- gate it behind a confirm.
+
+    Returns the same shape as `send_waiver` (with `add` set to the dropped player
+    so the audit and the UI have a name to show), including ESPN's raw redacted
+    response, so a refused envelope is visible rather than silent.
+    """
+    url = transactions_url(season, league_id)
+    if not WAIVER_WRITE_ENABLED:
+        raise RuntimeError("Waiver writing is disabled (WAIVER_WRITE_ENABLED is False).")
+    if not (swid and espn_s2):
+        raise RuntimeError("ESPN cookies are missing; connect ESPN before a drop.")
+
+    summary = f"Drop {drop.name} ({drop.position})"
+    body = build_drop_body(
+        team_id=team_id, swid=swid, scoring_period_id=scoring_period_id, drop=drop,
+    )
+    headers = {**_WRITE_HEADERS, "Cookie": f"espn_s2={espn_s2}; SWID={swid};"}
+    try:
+        with httpx.Client(timeout=_TIMEOUT, transport=transport, follow_redirects=True) as client:
+            resp = client.post(url, json=body, headers=headers)
+    except httpx.HTTPError as exc:
+        return WaiverResult(
+            False, 0, url, "DROP", drop, drop, 0, summary,
+            redact(f"Could not reach ESPN: {exc}"),
+        )
+
+    ok = 200 <= resp.status_code < 300
+    log.info("Drop from team %s (league %s): HTTP %s", team_id, league_id, resp.status_code)
+    return WaiverResult(
+        ok=ok, status_code=resp.status_code, url=url, kind="DROP",
+        add=drop, drop=drop, bid=0, summary=summary,
+        response=redact((resp.text or "")[:1000]) or f"(empty body, HTTP {resp.status_code})",
+    )
+
+
 def send_waiver(
     *,
     season: int,

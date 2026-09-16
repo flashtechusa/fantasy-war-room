@@ -258,7 +258,7 @@ def _reasons(target: WaiverTarget, week: int, budget: int) -> list[str]:
             f"Adds {target.week_gain:.1f} pts to your week {week} lineup"
         )
     else:
-        out.append(f"Doesn't crack this week's lineup, but helps later")
+        out.append("Doesn't crack this week's lineup, but helps later")
 
     if target.season_gain > 0:
         out.append(f"Worth {target.season_gain:.1f} pts to your lineup rest-of-season")

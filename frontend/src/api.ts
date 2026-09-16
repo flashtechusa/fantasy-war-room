@@ -426,6 +426,8 @@ export interface LineupResponse {
   week: number
   espn_sync?: EspnSync
   ir?: IrSection
+  /** Where ESPN has each player right now, keyed by player id: "TE", "BE", "IR". */
+  current_slots?: Record<string, string>
   projected_points: number
   points_vs_naive: number
   starters: {
@@ -599,6 +601,25 @@ export interface IrPlan {
   blocked: IrRow[]
   drop_candidate: IrRow | null
   needs_attention: boolean
+}
+
+export interface IrReturnResult {
+  ok: boolean
+  preview?: boolean
+  player: { espn_player_id: number; name: string; position: string; injury_status?: string | null }
+  bench_free: number
+  still_ir_eligible: boolean
+  needs_drop: boolean
+  candidates: {
+    espn_player_id: number
+    name: string
+    position: string
+    projected_points: number
+    injury_status?: string | null
+  }[]
+  dropped?: { ok: boolean; status_code: number; name: string; response: string } | null
+  moved?: { ok: boolean; status_code: number; name: string; response: string } | null
+  detail?: string
 }
 
 export interface LineupApplyResult {
@@ -1240,6 +1261,18 @@ export const api = {
     auto_ir_return?: 'alert' | 'drop'
   }) =>
     request<{ ok: boolean }>('/api/season/automode/settings', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  /**
+   * Move a healed player off IR and onto my bench.
+   *
+   * Called first without `confirm` to see the plan -- ESPN blocks the move when
+   * the roster is full, and then a drop (irreversible) has to be chosen by hand.
+   */
+  irReturn: (body: { espn_player_id: number; drop_id?: number; confirm?: boolean }) =>
+    request<IrReturnResult>('/api/season/ir/return', {
       method: 'POST',
       body: JSON.stringify(body),
     }),

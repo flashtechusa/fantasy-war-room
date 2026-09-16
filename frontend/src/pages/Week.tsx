@@ -8,8 +8,159 @@
 
 import { useState } from 'react'
 import { api } from '../api'
+import type { IrReturnResult, WeekPlayer } from '../api'
 import { Banner, Card, EspnSyncLine, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
+
+/**
+ * Where ESPN has this player right now, shown only when it differs from what we
+ * recommend.
+ *
+ * Reported from real use, repeatedly: the Start table looks like a statement of
+ * fact ("Bowers IS in my lineup") when it is advice ("Bowers SHOULD start"). So
+ * when ESPN has him somewhere else, the row says so.
+ */
+function EspnSlot({
+  current,
+  recommended,
+}: {
+  current?: string
+  recommended: string
+}) {
+  if (!current || current.toUpperCase() === recommended.toUpperCase()) return null
+  const label = current.toUpperCase() === 'BE' ? 'on your bench' : `at ${current.toUpperCase()}`
+  return (
+    <span className="tiny" style={{ color: 'var(--warn, #d08a30)', marginLeft: 6 }}>
+      · ESPN has him {label}
+    </span>
+  )
+}
+
+/**
+ * "Move to bench" for a player sitting in an IR slot.
+ *
+ * ESPN forces a healed player off IR and blocks every other roster move until he
+ * is off it, so this has to be possible from here rather than only in the ESPN
+ * app. Two shapes: with bench room it is one reversible lineup move; with a full
+ * roster ESPN will not take him back until something is dropped, so the drop is
+ * chosen by hand, named, and confirmed -- never picked for you.
+ */
+function IrReturnButton({
+  player,
+  onDone,
+}: {
+  player: WeekPlayer
+  onDone: () => void
+}) {
+  const [plan, setPlan] = useState<IrReturnResult | null>(null)
+  const [dropId, setDropId] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const [done, setDone] = useState<IrReturnResult | null>(null)
+
+  async function preview() {
+    setBusy(true)
+    setErr(null)
+    try {
+      setPlan(await api.irReturn({ espn_player_id: player.espn_player_id }))
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function apply() {
+    setBusy(true)
+    setErr(null)
+    try {
+      const result = await api.irReturn({
+        espn_player_id: player.espn_player_id,
+        drop_id: dropId ?? undefined,
+        confirm: true,
+      })
+      setDone(result)
+      setPlan(null)
+      onDone()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (done) {
+    return (
+      <Banner kind={done.ok ? 'info' : 'error'}>
+        {done.ok
+          ? `${done.player.name} is back on your bench${done.dropped ? `, ${done.dropped.name} dropped` : ''}.`
+          : done.detail || `ESPN did not accept it (HTTP ${done.moved?.status_code ?? 0}).`}
+        {!done.ok && (done.moved?.response || done.dropped?.response) && (
+          <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+            {done.moved?.response || done.dropped?.response}
+          </div>
+        )}
+      </Banner>
+    )
+  }
+
+  if (!plan) {
+    return (
+      <>
+        <button className="btn sm" disabled={busy} onClick={preview}>
+          {busy ? 'Checking…' : 'Move to bench'}
+        </button>
+        {err && <div style={{ marginTop: 6 }}><Banner kind="error">{err}</Banner></div>}
+      </>
+    )
+  }
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      {plan.needs_drop ? (
+        <>
+          <div className="small">
+            Your roster is full, so ESPN won't take {plan.player.name} back until you
+            drop someone. Pick who — <strong>this can't be undone</strong>:
+          </div>
+          <div className="row wrap" style={{ gap: 6, margin: '8px 0' }}>
+            {plan.candidates.map((c) => (
+              <button
+                key={c.espn_player_id}
+                className={`btn sm ${dropId === c.espn_player_id ? 'primary' : ''}`}
+                onClick={() => setDropId(c.espn_player_id)}
+              >
+                {c.name} ({c.position}) · {c.projected_points.toFixed(1)}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : (
+        <div className="small">
+          This moves {plan.player.name} from IR to your bench on ESPN. You have{' '}
+          {plan.bench_free} open spot{plan.bench_free === 1 ? '' : 's'}.
+        </div>
+      )}
+      <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+        <button
+          className="btn sm primary"
+          disabled={busy || (plan.needs_drop && dropId === null)}
+          onClick={apply}
+        >
+          {busy
+            ? 'Working…'
+            : plan.needs_drop
+              ? 'Drop and move to bench'
+              : 'Confirm — move to bench'}
+        </button>
+        <button className="btn sm" disabled={busy} onClick={() => { setPlan(null); setDropId(null) }}>
+          Cancel
+        </button>
+      </div>
+      {err && <div style={{ marginTop: 6 }}><Banner kind="error">{err}</Banner></div>}
+    </div>
+  )
+}
 
 export default function Week() {
   const [week, setWeek] = useState<number | undefined>(undefined)
@@ -88,6 +239,10 @@ export default function Week() {
       )}
 
       <Card title="Start">
+        <div className="small muted" style={{ marginBottom: 8 }}>
+          This is the lineup we'd set — not necessarily what ESPN has right now.
+          Where they differ, the row says so; the Auto tab applies it for you.
+        </div>
         <div className="table-wrap">
           <table>
             <thead>
@@ -113,6 +268,10 @@ export default function Week() {
                               CLOSE
                             </span>
                           )}
+                          <EspnSlot
+                            current={data.current_slots?.[String(entry.player.espn_player_id)]}
+                            recommended={entry.slot}
+                          />
                         </div>
                         <div className="tiny faint">
                           {entry.player.pro_team} · {entry.reason}
@@ -169,6 +328,10 @@ export default function Week() {
                       {player.name}
                       <InjuryTag status={player.injury_status} />
                       {player.on_bye && <span className="faint tiny"> · BYE</span>}
+                      <EspnSlot
+                        current={data.current_slots?.[String(player.espn_player_id)]}
+                        recommended="BE"
+                      />
                     </td>
                     <td>
                       <Pos position={player.position} />
@@ -233,6 +396,18 @@ export default function Week() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {data.ir.players.length > 0 && (
+            <div style={{ marginTop: 10 }}>
+              {data.ir.players.map((player) => (
+                <div key={player.espn_player_id} style={{ marginBottom: 8 }}>
+                  <div className="tiny faint" style={{ marginBottom: 2 }}>
+                    {player.name}
+                  </div>
+                  <IrReturnButton player={player} onDone={lineup.reload} />
+                </div>
+              ))}
             </div>
           )}
           <div className="tiny faint" style={{ marginTop: 8 }}>

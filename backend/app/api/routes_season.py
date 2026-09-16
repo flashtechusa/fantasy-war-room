@@ -224,6 +224,10 @@ def start_sit(
         ],
         "unfilled_slots": result.unfilled_slots,
         "estimated_projections": estimated,
+        # What ESPN has RIGHT NOW, so the screen can show where its recommendation
+        # differs from your actual lineup. Without this the Start table reads as a
+        # statement of fact ("he IS starting") rather than advice ("he SHOULD").
+        "current_slots": {str(pid): slot for pid, slot in current_slots.items()},
         "ir": {
             "slots": int(getattr(league, "ir_slots", 0) or 0),
             "used": len(on_ir),
@@ -1206,6 +1210,215 @@ def _revalidate_waiver(session, league, mine, add_id, drop_id):
     if add_row is not None and (add_row.availability or "").upper() not in {"FREEAGENT", "WAIVERS"}:
         return "that player is no longer a free agent."
     return None
+
+
+# ---------------------------------------------------------------------------
+# Getting a healed player off IR -- from inside the app
+# ---------------------------------------------------------------------------
+
+
+class IrReturnRequest(BaseModel):
+    espn_player_id: int = Field(..., description="The player currently in an IR slot.")
+    drop_id: int | None = Field(
+        None, description="Who to drop to make room. Only needed when the roster is full."
+    )
+    confirm: bool = Field(False, description="Must be true to write anything to ESPN.")
+    week: int | None = Field(default=None, ge=1, le=18)
+
+
+def _ir_context(session, league, engine, week, player_id):
+    """(mine, roster, the player's row, bench_free) for an IR return. Fails closed."""
+    mine = season_service.my_team(session, league)
+    if mine is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Your team is not identified yet.",
+        )
+    my_ids = season_service.my_roster_ids(session, league)
+    from ..engine.roster_move import active_roster_limit
+    from ..services import automode
+
+    roster = automode.weekly_roster(session, league, engine, week, my_ids)
+    current = automode.current_slots_by_id(mine)
+    if (current.get(player_id) or "").upper() != "IR":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="That player is not in an IR slot, so there is nothing to move.",
+        )
+    player = next((p for p in roster if p.espn_player_id == player_id), None)
+    if player is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That player is not on your roster.",
+        )
+    limit = active_roster_limit(
+        getattr(league, "roster_slots", None), getattr(league, "bench_slots", 0)
+    )
+    # A player on IR does not occupy an active spot -- that is what has to change.
+    active = sum(1 for slot in current.values() if (slot or "").upper() != "IR")
+    return mine, roster, current, player, max(limit - active, 0)
+
+
+def _drop_candidates(roster, current, exclude: set[int], limit: int = 6) -> list[dict]:
+    """Bench players a drop could take, cheapest first. Named only -- never dropped here."""
+    bench = [
+        p for p in roster
+        if (current.get(p.espn_player_id) or "BE").upper() == "BE"
+        and p.espn_player_id not in exclude
+    ]
+    bench.sort(key=lambda p: (p.projected_points, p.name))
+    return [
+        {
+            "espn_player_id": p.espn_player_id, "name": p.name, "position": p.position,
+            "projected_points": round(p.projected_points, 1),
+            "injury_status": p.injury_status,
+        }
+        for p in bench[:limit]
+    ]
+
+
+@router.post("/ir/return")
+def ir_return(
+    payload: IrReturnRequest,
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+    user=Depends(require_auto_mode),
+) -> dict:
+    """Move a healed player off IR and onto my bench, dropping someone if I say so.
+
+    ESPN forces a healed player off IR and blocks every other roster move until he
+    is off it, so this has to be doable from here rather than only in the ESPN app.
+    Two shapes, both staged:
+
+      Room on the bench -- one lineup move, IR to BE. Reversible, so it needs only
+      the usual confirm.
+      Roster full      -- nothing happens without an explicit `drop_id`. The drop
+      is a separate, irreversible write, so it is named in the preview, confirmed
+      by hand, and audited; only if ESPN accepts it do we send the bench move.
+
+    With `confirm` false this writes nothing and returns the plan.
+    """
+    from ..services import automode
+
+    def refuse(code: int, statusname: str, detail: str):
+        _auto_run(session, user=user, tier="lineup", statusname=statusname, summary=detail)
+        raise HTTPException(status_code=code, detail=detail)
+
+    if not getattr(settings, "auto_mode_enabled", False):
+        refuse(status.HTTP_403_FORBIDDEN, "disabled",
+               "Auto Mode is switched off for this installation.")
+    if not (settings.espn_swid and settings.espn_s2):
+        refuse(status.HTTP_409_CONFLICT, "no_credentials",
+               "Connect ESPN (SWID + espn_s2) before moving a player off IR.")
+
+    # Diff against ESPN's real roster, not a stale copy.
+    _refresh_rosters(session, settings)
+    week = _resolve_week(payload.week, settings)
+    mine, roster, current, player, bench_free = _ir_context(
+        session, league, engine, week, payload.espn_player_id
+    )
+    still_hurt = automode.ir_eligible(player.injury_status)
+    needs_drop = bench_free <= 0 and not payload.drop_id
+    plan = {
+        "player": {
+            "espn_player_id": player.espn_player_id, "name": player.name,
+            "position": player.position, "injury_status": player.injury_status,
+        },
+        "bench_free": bench_free,
+        "still_ir_eligible": still_hurt,
+        "needs_drop": needs_drop,
+        "candidates": _drop_candidates(
+            roster, current, exclude={player.espn_player_id}
+        ) if bench_free <= 0 else [],
+    }
+
+    if not payload.confirm:
+        plan["ok"] = False
+        plan["preview"] = True
+        return plan
+    if needs_drop:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Your roster is full, so ESPN will not take him back on the bench "
+                "until you drop someone. Pick who to drop and confirm again."
+            ),
+        )
+
+    dropped = None
+    if payload.drop_id:
+        if payload.drop_id not in season_service.team_roster_ids(league, mine.espn_team_id):
+            refuse(status.HTTP_409_CONFLICT, "roster_changed",
+                   "The player you want to drop is no longer on your roster.")
+        _, drop_player, _ = _resolve_waiver(
+            session, league, mine, payload.drop_id, None
+        )
+        drop_player = drop_player or waiver_write.WaiverPlayer(
+            payload.drop_id,
+            next((p.name for p in roster if p.espn_player_id == payload.drop_id), "Player"),
+            next((p.position for p in roster if p.espn_player_id == payload.drop_id), ""),
+        )
+        drop_result = waiver_write.send_drop(
+            season=league.season,
+            league_id=league.espn_league_id,
+            team_id=mine.espn_team_id,
+            swid=settings.espn_swid,
+            espn_s2=settings.espn_s2,
+            scoring_period_id=week,
+            drop=drop_player,
+        )
+        _waiver_audit(
+            session, user=user, league=league, mine=mine, add=None, drop=drop_player,
+            kind="DROP", bid=0,
+            fp=waiver_write.fingerprint(
+                season=league.season, league_id=league.espn_league_id,
+                team_id=mine.espn_team_id, add_id=0, drop_id=payload.drop_id,
+            ),
+            outcome="submitted" if drop_result.ok else "rejected", ok=drop_result.ok,
+            status_code=drop_result.status_code, detail=drop_result.response,
+        )
+        dropped = {
+            "ok": drop_result.ok, "status_code": drop_result.status_code,
+            "name": drop_player.name, "response": drop_result.response,
+        }
+        if not drop_result.ok:
+            # The spot never opened, so the bench move would only fail too.
+            plan.update({"ok": False, "dropped": dropped, "moved": None,
+                         "detail": "ESPN did not accept the drop, so nothing was moved."})
+            return plan
+        _refresh_rosters(session, settings)
+
+    move = lineup_write.LineupMove(player.espn_player_id, player.name, "IR", "BE")
+    result = lineup_write.set_lineup(
+        season=league.season,
+        league_id=league.espn_league_id,
+        team_id=mine.espn_team_id,
+        swid=settings.espn_swid,
+        espn_s2=settings.espn_s2,
+        scoring_period_id=week,
+        moves=[move],
+    )
+    _auto_run(
+        session, user=user, tier="lineup",
+        statusname="applied" if result.ok else "rejected",
+        summary=(
+            f"HTTP {result.status_code}: {player.name} IR->BE"
+            + (f" (dropped {dropped['name']})" if dropped else "")
+        ),
+    )
+    if result.ok:
+        _refresh_rosters(session, settings)
+    plan.update({
+        "ok": result.ok,
+        "dropped": dropped,
+        "moved": {
+            "ok": result.ok, "status_code": result.status_code,
+            "name": player.name, "response": result.response,
+        },
+    })
+    return plan
 
 
 def _waiver_audit(session, *, user, league, mine, add, drop, kind, bid, fp,

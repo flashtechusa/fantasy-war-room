@@ -150,3 +150,64 @@ class TestTheWeekScreenShowsIr:
         assert stashed not in started, "a player on IR is not eligible to start"
         assert stashed not in benched, "and he is not on the bench either"
         assert body["ir"]["used"] == 1
+
+
+class TestGettingOffIrFromInsideTheApp:
+    """ESPN forces a healed player off IR and blocks every other roster move until
+    he is off it. Doing that should not require opening the ESPN app.
+
+    The irreversible half stays gated: with a full roster nothing happens until the
+    user names the drop themselves.
+    """
+
+    def _stash(self, client) -> int:
+        from app.db import session_scope
+        from app.models import League, LeagueTeam
+
+        with session_scope() as s:
+            league = s.query(League).first()
+            mine = s.query(LeagueTeam).filter(
+                LeagueTeam.league_id == league.id, LeagueTeam.is_mine
+            ).first()
+            roster = list(mine.roster or [])
+            stashed = roster[0]["espn_player_id"]
+            roster[0] = {**roster[0], "slot": "IR"}
+            mine.roster = roster
+        return stashed
+
+    def test_the_install_switch_still_gates_it(self, drafted_league):
+        pid = self._stash(drafted_league)
+        r = drafted_league.post("/api/season/ir/return", json={"espn_player_id": pid})
+        # Auto Mode is off by default, so this write is refused like every other.
+        assert r.status_code in (403, 404)
+
+    def test_a_player_not_on_ir_is_refused(self, drafted_league):
+        from app.db import session_scope
+        from app.models import League, LeagueTeam, User
+
+        assert drafted_league.post("/api/admin/auto-mode", json={"enabled": True}).status_code == 200
+        with session_scope() as s:
+            s.query(User).filter(User.username == "tester").first().can_auto_mode = True
+            league = s.query(League).first()
+            mine = s.query(LeagueTeam).filter(
+                LeagueTeam.league_id == league.id, LeagueTeam.is_mine
+            ).first()
+            benched = mine.roster[0]["espn_player_id"]
+
+        r = drafted_league.post("/api/season/ir/return", json={"espn_player_id": benched})
+        # No cookies in the demo fixture, so it stops at the credential gate --
+        # never at "sure, moved him".
+        assert r.status_code == 409
+        assert "Connect ESPN" in r.json()["detail"]
+
+    def test_a_drop_only_transaction_carries_no_add(self):
+        from app.espn import waiver_write
+
+        body = waiver_write.build_drop_body(
+            team_id=7, swid="{SWID}", scoring_period_id=2,
+            drop=waiver_write.WaiverPlayer(99, "Spare Part", "RB"),
+        )
+        assert [i["type"] for i in body["items"]] == ["DROP"]
+        assert body["items"][0]["toTeamId"] == 0, "dropped players go to nobody"
+        assert body["items"][0]["fromTeamId"] == 7
+        assert "bidAmount" not in body, "a drop spends no FAAB"
