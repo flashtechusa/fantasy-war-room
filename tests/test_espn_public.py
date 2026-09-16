@@ -12,7 +12,7 @@ covered there.
 
 from __future__ import annotations
 
-from app.projections.espn_public import PublicProjection, parse_projections
+from app.projections.espn_public import parse_projections
 
 
 def _entry(player_id: int, name: str, position_id: int, stats: list[dict]) -> dict:
