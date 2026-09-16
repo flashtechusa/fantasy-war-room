@@ -223,7 +223,9 @@ export default function Week() {
         <Banner kind="info">
           {data.estimated_count} of {data.roster_count} players have no published week-
           {data.week} projection and are shown as season averages. They are listed at the
-          bottom.
+          bottom. If that's most of your roster in a week that has already started,
+          hit <strong>Refresh players</strong> on the League screen — ESPN only sends a
+          week's projections when we ask for that week.
         </Banner>
       )}
 

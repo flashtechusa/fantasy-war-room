@@ -99,6 +99,27 @@ def data_age_seconds(session: Session, league: League) -> float | None:
     return (utcnow() - latest).total_seconds()
 
 
+def has_weekly_projections(session: Session, league: League, week: int) -> bool:
+    """Whether we hold any real per-week projections for this scoring period.
+
+    The signal that a pool import is due for a *reason other than age*: when the
+    week rolls over, last week's pool is minutes old but carries nothing for the
+    new week, so every number on the Week screen silently becomes a season
+    average. Cheap enough to check on a page load.
+    """
+    row = session.scalars(
+        select(PlayerWeeklyProjection.id)
+        .join(Player, Player.id == PlayerWeeklyProjection.player_id)
+        .where(
+            Player.season == league.season,
+            Player.source == league.source,
+            PlayerWeeklyProjection.week == int(week),
+        )
+        .limit(1)
+    ).first()
+    return row is not None
+
+
 def roster_age_seconds(league: League) -> float | None:
     """How long since we last pulled team rosters (and league settings) from ESPN.
 
@@ -405,15 +426,32 @@ def import_players(
     league: League,
     provider: DataProvider | None = None,
     settings: Settings | None = None,
+    week: int | None = None,
 ) -> int:
-    """Refresh the player pool and its projections. Returns players imported."""
+    """Refresh the player pool and its projections. Returns players imported.
+
+    `week` is what makes the in-season screens work. ESPN only puts a scoring
+    period's projected splits in the payload when you ask for that period, so a
+    pool imported without one carries the season total and nothing else -- and
+    every weekly number falls back to "season total spread evenly", which is the
+    same figure every week. Reported from real use as "14 of 15 players have no
+    published week-2 projection" in the middle of week 2. Defaults to the
+    provider's current week.
+    """
     settings = settings or get_settings()
     provider = provider or build_provider(settings)
     source_key = getattr(provider, "source", "espn")
 
     ensure_projection_sources(session)
 
-    records = provider.player_pool(limit=settings.player_pool_size, ppr=league.is_ppr)
+    if week is None:
+        try:
+            week = max(int(provider.current_week), 1)
+        except Exception:      # noqa: BLE001 - a bad week must not block the import
+            week = None
+    records = provider.player_pool(
+        limit=settings.player_pool_size, ppr=league.is_ppr, week=week
+    )
     if not records:
         raise ImportError_("The provider returned an empty player pool.")
 

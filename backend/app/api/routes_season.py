@@ -96,6 +96,8 @@ def _refresh_pool_job(settings: Settings) -> None:
             league = importer.get_active_league(session, settings)
             if league is None:
                 return
+            # For the current scoring period: ESPN only includes a week's projected
+            # splits when asked for that week.
             importer.import_players(session, league, build_provider(settings), settings)
             importer.refresh_rosters(session, settings)
         log.info("Background player-pool refresh complete.")
@@ -121,7 +123,15 @@ def _maybe_refresh_pool(
         if now - _last_pool_refresh.get(league.id, 0.0) < _POOL_REFRESH_MIN_INTERVAL:
             return
         age = importer.data_age_seconds(session, league)
-        if age is not None and age < _POOL_STALE_AFTER:
+        # Age is not the only reason to re-import. When the week rolls over the
+        # pool is minutes old but holds nothing for the new scoring period, and
+        # every weekly number quietly becomes a season average -- so a missing
+        # week counts as stale however fresh the rows are.
+        week = _resolve_week(None, settings)
+        if (
+            age is not None and age < _POOL_STALE_AFTER
+            and importer.has_weekly_projections(session, league, week)
+        ):
             return
         _last_pool_refresh[league.id] = now
         background_tasks.add_task(_refresh_pool_job, settings)
