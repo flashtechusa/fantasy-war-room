@@ -211,3 +211,17 @@ class TestGettingOffIrFromInsideTheApp:
         assert body["items"][0]["toTeamId"] == 0, "dropped players go to nobody"
         assert body["items"][0]["fromTeamId"] == 7
         assert "bidAmount" not in body, "a drop spends no FAAB"
+
+
+def test_the_week_screen_is_told_the_exact_writes(drafted_league):
+    """The screen must not infer the diff from its own tables.
+
+    It did, and it drifted: two starters swapping equivalent slots showed as two
+    pending changes while the write path (correctly) declined to make them. The
+    payload now carries the moves computed by the same functions that send them.
+    """
+    body = drafted_league.get("/api/season/lineup").json()
+    assert "pending_moves" in body
+    for move in body["pending_moves"]:
+        assert set(move) == {"espn_player_id", "name", "from_slot", "to_slot"}
+        assert move["from_slot"] != move["to_slot"], "a move must actually move someone"
