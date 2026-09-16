@@ -428,6 +428,8 @@ export interface LineupResponse {
   ir?: IrSection
   /** Where ESPN has each player right now, keyed by player id: "TE", "BE", "IR". */
   current_slots?: Record<string, string>
+  /** Exactly what Apply would write — computed by the same code that sends it. */
+  pending_moves?: { espn_player_id: number; name: string; from_slot: string; to_slot: string }[]
   projected_points: number
   points_vs_naive: number
   starters: {

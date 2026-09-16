@@ -185,6 +185,24 @@ def start_sit(
 
     result = optimise_lineup(roster, league_shape(league), week)
 
+    # The moves Apply would actually send. Computed here by the same functions the
+    # write path uses, rather than inferred from the tables below -- the screen and
+    # the write then cannot drift apart (they did: the Start table showed two
+    # starters swapping slots, a change Auto Mode correctly declines to make).
+    pending_moves: list[dict] = []
+    try:
+        ir_plan = automode.ir_plan_for(roster + on_ir, current_slots, league)
+        lineup_batch, stash_batch = automode.lineup_and_ir_moves(
+            roster + on_ir, engine.shape, current_slots, ir_plan
+        )
+        pending_moves = [
+            {"espn_player_id": m.espn_player_id, "name": m.name,
+             "from_slot": m.from_slot, "to_slot": m.to_slot}
+            for m in (lineup_batch + stash_batch)
+        ]
+    except Exception:      # noqa: BLE001 - a preview must never break the screen
+        log.warning("Could not compute pending lineup moves (non-fatal).")
+
     estimated = [p.name for p in roster if not p.week_projection_is_real]
     # ESPN publishes real per-week splits only a short way ahead. Past that the
     # fallback is the season total spread evenly, which is the *same number
@@ -238,6 +256,9 @@ def start_sit(
         # differs from your actual lineup. Without this the Start table reads as a
         # statement of fact ("he IS starting") rather than advice ("he SHOULD").
         "current_slots": {str(pid): slot for pid, slot in current_slots.items()},
+        # The exact writes Apply would send -- computed by the same code that
+        # sends them, so the screen can never disagree with what actually happens.
+        "pending_moves": pending_moves,
         "ir": {
             "slots": int(getattr(league, "ir_slots", 0) or 0),
             "used": len(on_ir),

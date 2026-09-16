@@ -351,3 +351,77 @@ def _shape():
     from app.engine.league_shape import LeagueShape
 
     return LeagueShape(team_count=10, dedicated={"TE": 1}, bench_slots=2)
+
+
+class TestNoPointlessMoves:
+    """Seen on screen: ESPN had Waddle at WR and Watson at FLEX; we proposed
+    Watson to WR and Waddle to FLEX. Both start either way and the projected
+    total is identical -- two writes that change nothing, re-sent every cycle.
+
+    The optimiser fills slots most-restrictive-first, which is why it hands
+    equivalent starters each other's slots. Settling them back onto ESPN's
+    assignment is free: a swap between two starters each eligible for the other's
+    slot cannot change the score.
+    """
+
+    @staticmethod
+    def _shape():
+        # Two dedicated WR slots plus a FLEX -- the shape that produced the
+        # pointless swap on screen.
+        from app.engine.league_shape import LeagueShape
+
+        return LeagueShape.from_slots(
+            team_count=10, roster_slots={"WR": 2, "FLEX": 1}, bench_slots=3,
+        )
+
+    @staticmethod
+    def _players(*specs):
+        from app.engine.weekly import WeeklyPlayer
+
+        return [
+            WeeklyPlayer(
+                espn_player_id=pid, name=name, position=pos,
+                week_points=pts, season_points=pts * 16, week=1,
+            ).as_roster_player(use_week=True)
+            for pid, name, pos, pts in specs
+        ]
+
+    def test_two_starters_are_not_swapped_for_nothing(self):
+        shape = self._shape()
+        roster = self._players(
+            (1, "Waddle", "WR", 15.7),
+            (2, "Watson", "WR", 16.8),
+            (3, "Higgins", "WR", 16.0),
+        )
+        # ESPN: Waddle WR, Watson FLEX, Higgins WR -- all three already starting.
+        current = {1: "WR", 2: "FLEX", 3: "WR"}
+        moves = automode.lineup_moves(roster, shape, current)
+        assert moves == [], (
+            "everyone who should start is already starting -- swapping slots "
+            f"changes nothing, got {[(m.name, m.from_slot, m.to_slot) for m in moves]}"
+        )
+
+    def test_a_real_upgrade_still_moves(self):
+        shape = self._shape()
+        roster = self._players(
+            (1, "Waddle", "WR", 15.7),
+            (2, "Watson", "WR", 16.8),
+            (3, "Higgins", "WR", 16.0),
+            (4, "Bench Guy", "WR", 2.0),
+        )
+        # ESPN benches Watson and starts the scrub: that is a real change.
+        current = {1: "WR", 2: "BE", 3: "WR", 4: "FLEX"}
+        moves = {m.espn_player_id: m.to_slot for m in automode.lineup_moves(roster, shape, current)}
+        assert moves.get(2) in {"WR", "FLEX"}, "the better player has to get in"
+        assert moves.get(4) == "BE", "and the scrub has to come out"
+
+    def test_an_ineligible_swap_is_refused(self):
+        from app.engine.league_shape import LeagueShape
+
+        # A dedicated TE slot cannot hold a WR, so no swap is available and the
+        # real move stands.
+        shape = LeagueShape(team_count=10, dedicated={"WR": 1, "TE": 1}, bench_slots=2)
+        roster = self._players((1, "Wideout", "WR", 12.0), (2, "Tight End", "TE", 9.0))
+        moves = automode.lineup_moves(roster, shape, {1: "TE", 2: "WR"})
+        by_id = {m.espn_player_id: m.to_slot for m in moves}
+        assert by_id[1] == "WR" and by_id[2] == "TE"

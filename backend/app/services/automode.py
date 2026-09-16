@@ -300,6 +300,53 @@ def weekly_roster(session, league, engine, week: int, my_ids: set[int]):
     return [p.as_roster_player(use_week=True) for p in weekly]
 
 
+def _eligible_by_slot(shape) -> dict[str, set[str]]:
+    """Which positions each starting slot will accept."""
+    out = {position: {position} for position in getattr(shape, "dedicated", {})}
+    for flex in getattr(shape, "flex", []) or []:
+        out[flex.label] = set(flex.eligible)
+    return out
+
+
+def prefer_current_slots(optimal_slot_by_id, current_slots, shape, position_by_id):
+    """Leave a starter where ESPN already has him when moving him gains nothing.
+
+    The optimiser fills slots most-restrictive-first, so it can hand two starters
+    each other's slots -- ESPN has Waddle at WR and Watson at FLEX, we assign
+    Watson WR and Waddle FLEX. Both start either way and the projected total is
+    identical, but it reads as two pending changes and Auto Mode writes them
+    every cycle for nothing.
+
+    Swapping two starters who are each eligible for the other's slot cannot change
+    the score, so this is free: it only ever reduces the diff.
+    """
+    eligible = _eligible_by_slot(shape)
+    by_slot = {
+        slot: pid for pid, slot in optimal_slot_by_id.items() if slot in eligible
+    }
+    for _ in range(len(by_slot)):      # bounded: each pass fixes at least one pair
+        swapped = False
+        for pid, slot in list(optimal_slot_by_id.items()):
+            here = (current_slots.get(pid) or "").upper()
+            if slot not in eligible or here == slot or here not in eligible:
+                continue
+            other = by_slot.get(here)
+            if other is None or other == pid:
+                continue
+            # Legal only if each player may occupy the slot he is being handed.
+            if position_by_id.get(pid) not in eligible[here]:
+                continue
+            if position_by_id.get(other) not in eligible[slot]:
+                continue
+            optimal_slot_by_id[pid], optimal_slot_by_id[other] = here, slot
+            by_slot[here], by_slot[slot] = pid, other
+            swapped = True
+            break
+        if not swapped:
+            break
+    return optimal_slot_by_id
+
+
 def lineup_moves(roster, shape, current_slots, ir_targets: dict[int, str] | None = None):
     """The slot changes to turn a team's current lineup into its optimal one.
 
@@ -322,6 +369,12 @@ def lineup_moves(roster, shape, current_slots, ir_targets: dict[int, str] | None
     optimal_slot_by_id = {
         s.player.espn_player_id: s.slot for s in optimal.starters if s.player
     }
+    # Two starters swapping slots is a write that changes nothing -- settle them
+    # onto ESPN's existing assignment first.
+    prefer_current_slots(
+        optimal_slot_by_id, current_slots, shape,
+        {p.espn_player_id: p.position for p in roster},
+    )
     for p in optimal.bench:
         optimal_slot_by_id.setdefault(p.espn_player_id, "BE")
     optimal_slot_by_id.update(ir_targets)

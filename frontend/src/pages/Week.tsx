@@ -8,7 +8,7 @@
 
 import { useState } from 'react'
 import { api } from '../api'
-import type { IrReturnResult, WeekPlayer } from '../api'
+import type { IrReturnResult, LineupApplyResult, LineupResponse, WeekPlayer } from '../api'
 import { Banner, Card, EspnSyncLine, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
 
@@ -20,19 +20,178 @@ import { useAsync } from '../useAsync'
  * fact ("Bowers IS in my lineup") when it is advice ("Bowers SHOULD start"). So
  * when ESPN has him somewhere else, the row says so.
  */
-function EspnSlot({
-  current,
-  recommended,
-}: {
-  current?: string
-  recommended: string
-}) {
-  if (!current || current.toUpperCase() === recommended.toUpperCase()) return null
-  const label = current.toUpperCase() === 'BE' ? 'on your bench' : `at ${current.toUpperCase()}`
+function EspnSlot({ move }: { move?: { from_slot: string; to_slot: string } }) {
+  if (!move) return null
+  const from = move.from_slot.toUpperCase()
+  const label = from === 'BE' ? 'on your bench' : from === 'IR' ? 'on IR' : `at ${from}`
   return (
     <span className="tiny" style={{ color: 'var(--warn, #d08a30)', marginLeft: 6 }}>
       · ESPN has him {label}
     </span>
+  )
+}
+
+/**
+ * Your lineup as ESPN has it right now, and the moves that would change it.
+ *
+ * Asked for directly: "shouldn't this show what ESPN shows, because how will
+ * Auto Mode know what to change?" Auto Mode has always diffed against ESPN's
+ * real slots -- that is what it writes -- but nothing on screen showed them, so
+ * there was no way to check its arithmetic. Both sides are here now, and the
+ * difference between them IS the write.
+ */
+function EspnLineup({
+  data,
+  onApplied,
+}: {
+  data: LineupResponse
+  onApplied: () => void
+}) {
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<LineupApplyResult | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  const slots = data.current_slots
+  if (!slots || Object.keys(slots).length === 0) return null
+
+  // Everyone on the roster, wherever we happen to have listed them.
+  const everyone: WeekPlayer[] = [
+    ...data.starters.map((s) => s.player).filter((p): p is WeekPlayer => Boolean(p)),
+    ...data.bench,
+    ...(data.ir?.players ?? []),
+  ]
+  const seen = new Set<number>()
+  const roster = everyone.filter((p) => {
+    if (seen.has(p.espn_player_id)) return false
+    seen.add(p.espn_player_id)
+    return true
+  })
+
+  const current = (p: WeekPlayer) =>
+    (slots[String(p.espn_player_id)] || 'BE').toUpperCase()
+
+  const pending = new Map((data.pending_moves ?? []).map((m) => [m.espn_player_id, m]))
+  const changes = roster.filter((p) => pending.has(p.espn_player_id))
+
+  // ESPN's own slot order first (it is the league's), then the bench and IR.
+  const order: string[] = []
+  data.starters.forEach((entry) => {
+    if (!order.includes(entry.slot.toUpperCase())) order.push(entry.slot.toUpperCase())
+  })
+  roster.forEach((p) => {
+    const slot = current(p)
+    if (slot !== 'BE' && slot !== 'IR' && !order.includes(slot)) order.push(slot)
+  })
+  order.push('BE', 'IR')
+
+  const bySlot = order
+    .map((slot) => ({ slot, players: roster.filter((p) => current(p) === slot) }))
+    .filter((group) => group.players.length > 0)
+
+  const startedTotal = roster
+    .filter((p) => current(p) !== 'BE' && current(p) !== 'IR')
+    .reduce((sum, p) => sum + p.week_points, 0)
+
+  async function apply() {
+    setBusy(true)
+    setErr(null)
+    try {
+      setResult(await api.applyLineup(true))
+      setConfirming(false)
+      onApplied()
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card title="On ESPN right now">
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        Your actual lineup, as we last read it from ESPN — projected{' '}
+        <strong>{startedTotal.toFixed(1)}</strong> from the players ESPN currently has
+        starting.{' '}
+        {changes.length === 0
+          ? 'It already matches what we would set.'
+          : `${changes.length} change${changes.length === 1 ? '' : 's'} would turn it into ours.`}
+      </div>
+
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ESPN slot</th>
+              <th>Player</th>
+              <th className="num">Proj</th>
+            </tr>
+          </thead>
+          <tbody>
+            {bySlot.map((group) =>
+              group.players.map((player, index) => (
+                <tr key={`${group.slot}-${player.espn_player_id}`}>
+                  <td className="faint">{index === 0 ? group.slot : ''}</td>
+                  <td>
+                    {player.name}
+                    <InjuryTag status={player.injury_status} />
+                    {pending.get(player.espn_player_id) && (
+                      <span className="tiny" style={{ color: 'var(--warn, #d08a30)', marginLeft: 6 }}>
+                        · we'd move him to {pending.get(player.espn_player_id)!.to_slot}
+                      </span>
+                    )}
+                  </td>
+                  <td className="num">{player.week_points.toFixed(1)}</td>
+                </tr>
+              )),
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {changes.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          {!confirming ? (
+            <button className="btn sm primary" disabled={busy} onClick={() => setConfirming(true)}>
+              Apply our lineup to ESPN
+            </button>
+          ) : (
+            <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span className="tiny">This writes {changes.length} move(s) to ESPN now.</span>
+              <button className="btn sm primary" disabled={busy} onClick={apply}>
+                {busy ? 'Applying…' : 'Confirm write'}
+              </button>
+              <button className="btn sm" disabled={busy} onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {err && <div style={{ marginTop: 8 }}><Banner kind="error">{err}</Banner></div>}
+      {result && (
+        <div style={{ marginTop: 8 }}>
+          <Banner kind={result.ok ? 'info' : 'error'}>
+            {!result.ok
+              ? `ESPN did not accept it (HTTP ${result.status_code}).`
+              : result.moves.length === 0
+                ? 'ESPN already matched — no change needed.'
+                : `Applied. ${result.moves.length} move(s).`}
+            {result.moves.length > 0 && (
+              <div className="tiny" style={{ marginTop: 4 }}>
+                {result.moves.map((m) => `${m.name}: ${m.from_slot}→${m.to_slot}`).join(', ')}
+              </div>
+            )}
+            {!result.ok && (
+              <div className="tiny mono" style={{ marginTop: 4, whiteSpace: 'pre-wrap' }}>
+                {result.response}
+              </div>
+            )}
+          </Banner>
+        </div>
+      )}
+    </Card>
   )
 }
 
@@ -172,6 +331,11 @@ export default function Week() {
 
   const data = lineup.data
   const weeks = Array.from({ length: 18 }, (_, i) => i + 1)
+  // The writes Apply would send, straight from the backend -- so a row only says
+  // "ESPN has him elsewhere" when that would actually be changed.
+  const pendingById = new Map(
+    (data.pending_moves ?? []).map((m) => [m.espn_player_id, m]),
+  )
 
   return (
     <>
@@ -270,10 +434,7 @@ export default function Week() {
                               CLOSE
                             </span>
                           )}
-                          <EspnSlot
-                            current={data.current_slots?.[String(entry.player.espn_player_id)]}
-                            recommended={entry.slot}
-                          />
+                          <EspnSlot move={pendingById.get(entry.player.espn_player_id)} />
                         </div>
                         <div className="tiny faint">
                           {entry.player.pro_team} · {entry.reason}
@@ -292,6 +453,8 @@ export default function Week() {
           </table>
         </div>
       </Card>
+
+      <EspnLineup data={data} onApplied={lineup.reload} />
 
       {data.close_calls.length > 0 && (
         <Card title="Coin flips">
@@ -330,10 +493,7 @@ export default function Week() {
                       {player.name}
                       <InjuryTag status={player.injury_status} />
                       {player.on_bye && <span className="faint tiny"> · BYE</span>}
-                      <EspnSlot
-                        current={data.current_slots?.[String(player.espn_player_id)]}
-                        recommended="BE"
-                      />
+                      <EspnSlot move={pendingById.get(player.espn_player_id)} />
                     </td>
                     <td>
                       <Pos position={player.position} />
