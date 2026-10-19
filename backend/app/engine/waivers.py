@@ -146,11 +146,34 @@ def _starters(roster: list[WeeklyPlayer], shape: LeagueShape) -> list[WeeklyPlay
     ]
 
 
+def best_streamer(
+    free_agents: list[WeeklyPlayer],
+    position: str,
+    exclude: int,
+    unavailable_week: int | None = None,
+) -> WeeklyPlayer | None:
+    """Who you would pick up at this position if you needed one TODAY.
+
+    The alternative to carrying a backup all season is not fielding nobody -- it
+    is spending a waiver claim the week it happens. This is that player.
+
+    `unavailable_week` is for a bye you are covering: a man who is off that same
+    week is no fallback for it, however good he is the rest of the time.
+    """
+    options = [
+        p for p in free_agents
+        if p.position == position and p.espn_player_id != exclude
+        and not (unavailable_week and p.bye_week == unavailable_week)
+    ]
+    return max(options, key=lambda p: p.season_points, default=None)
+
+
 def insurance_value(
     roster: list[WeeklyPlayer],
     shape: LeagueShape,
     candidate: WeeklyPlayer,
     drop: WeeklyPlayer | None,
+    streamer: WeeklyPlayer | None = None,
 ) -> tuple[float, str]:
     """What he is worth if the man in front of him goes down.
 
@@ -160,18 +183,28 @@ def insurance_value(
     out, so the question worth asking is what your lineup looks like THEN -- with
     him on the roster versus without.
 
+    The baseline is the part that has to be right, and was not. It assumed that
+    with your starter gone you would field NOBODY, so a backup quarterback in a
+    one-quarterback league was credited with his entire season -- 148 points --
+    and the wire filled up with backup quarterbacks. You would not sit a slot
+    empty; you would claim the best man available that week. So the comparison
+    is against him: what this candidate is worth OVER the player you could get
+    anyway. Where the wire has nobody at the position, the old reading is the
+    right one -- then he really is worth his whole value.
+
     Returns the best case across your starters at his position, and who it covers.
     """
     kept = [
         p for p in roster
         if drop is None or p.espn_player_id != drop.espn_player_id
     ]
+    fallback = [streamer] if streamer is not None else []
     best_gain, covering = 0.0, ""
     for starter in _starters(kept, shape):
         if starter.position != candidate.position:
             continue
         without = [p for p in kept if p.espn_player_id != starter.espn_player_id]
-        base = _lineup_points(without, shape, use_week=False)
+        base = _lineup_points(without + fallback, shape, use_week=False)
         with_him = _lineup_points(without + [candidate], shape, use_week=False)
         gain = with_him - base
         if gain <= 0:
@@ -357,8 +390,17 @@ def recommend_waivers(
         season_gain = round(_lineup_points(trial, shape, use_week=False) - base_season, 2)
         # Not every useful addition changes today's lineup. A backup is bought
         # for the week a starter is out, so ask what the lineup looks like then.
-        insurance, insures = insurance_value(roster, shape, candidate, drop)
         byes = bye_weeks_covered(roster, shape, candidate, week)
+        # Two different fallbacks. For an injury, whoever is best on the wire.
+        # For a bye, whoever is best on the wire AND playing that week -- a
+        # replacement who is off the same Sunday replaces nothing.
+        insurance, insures = insurance_value(
+            roster, shape, candidate, drop,
+            streamer=best_streamer(
+                free_agents, candidate.position, candidate.espn_player_id,
+                unavailable_week=byes[0] if byes else None,
+            ),
+        )
         depth = round(
             candidate.season_points - (drop.season_points if drop else 0.0), 2
         )
@@ -402,7 +444,14 @@ def recommend_waivers(
         target.priority = round(max(0.0, min(100.0, 100.0 * blended / peak)), 1)
 
         if budget > 0:
-            pct = min(blended / FAAB_POINTS_PER_PERCENT, 60.0)
+            # Bid on what he adds to the lineup you are actually fielding.
+            # Insurance deliberately does NOT count here: a backup is worth
+            # rostering and worth about a dollar, and deriving the bid from the
+            # blended figure had the app asking for 37 of 100 FAAB for a third
+            # quarterback. What you would pay to cover a maybe is not what you
+            # would pay to win a week.
+            upgrade = target.season_gain * 0.7 + target.week_gain * 0.3
+            pct = min(max(upgrade, 0.0) / FAAB_POINTS_PER_PERCENT, 60.0)
             target.faab_pct = round(max(pct, 0.0), 1)
             target.faab_bid = max(1, int(round(budget * target.faab_pct / 100)))
 

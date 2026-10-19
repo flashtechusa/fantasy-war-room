@@ -120,7 +120,11 @@ class SeasonForm:
         """
         if len(self.recent_week_points) >= 3:
             return median(self.recent_week_points)
-        return self.recent_points / self.recent_games if self.recent_games else 0.0
+        if self.recent_games >= 2:
+            return self.recent_points / self.recent_games
+        # One game is not a trend, and reporting "27.6 over his last 1" invites
+        # exactly the wrong conclusion. Fall back to the season rate.
+        return self.points_per_game
 
 
 def opportunities_in(raw_stats: dict[str, float]) -> float:

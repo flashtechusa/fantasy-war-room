@@ -116,15 +116,33 @@ class TestByeCover:
         assert bye_weeks_covered(_roster(), _shape(), candidate, week=9) == []
 
     def test_covering_a_bye_outranks_vague_depth(self):
-        # Same player, same production; one of them fills a hole you can see
-        # coming. The certain one is worth more than the hypothetical one.
+        # Same production; one fills a hole you can see coming. A third, weaker
+        # receiver is on the wire as the man you could stream instead -- without
+        # one, neither of these is worth anything as cover, because each IS the
+        # other's fallback.
         cover = _p(107, "Covers Bye", "WR", 150, bye=11)
         vague = _p(108, "No Cover", "WR", 150, bye=7)
+        streamer = _p(109, "Scrap Heap", "WR", 40)
         targets = recommend_waivers(
-            roster=_roster(), free_agents=[cover, vague], shape=_shape(), week=1,
-            faab_budget=100, roster_is_full=True,
+            roster=_roster(), free_agents=[cover, vague, streamer], shape=_shape(),
+            week=1, faab_budget=100, roster_is_full=True,
         )
         assert targets[0].player.name == "Covers Bye", [t.player.name for t in targets]
+
+    def test_an_equal_player_on_the_wire_is_not_insurance(self):
+        """The streaming baseline, stated as a rule.
+
+        Two interchangeable receivers on the wire: claiming one gains nothing
+        over claiming the other the week you actually need him. This is what
+        stopped the app valuing a backup quarterback at his entire season.
+        """
+        a = _p(110, "One Of Two", "WR", 150)
+        b = _p(111, "Other Of Two", "WR", 150)
+        targets = recommend_waivers(
+            roster=_roster(), free_agents=[a, b], shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets == [], [t.player.name for t in targets]
 
 
 class TestInsuranceValueItself:
