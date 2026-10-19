@@ -250,8 +250,39 @@ def espn_health(settings: Settings = Depends(settings_dep)) -> dict:
 # Frontend
 # ---------------------------------------------------------------------------
 
+#: index.html must never be cached, and the hashed assets it points at always
+#: can be.
+#:
+#: Reported from real use: a phone showed the current build fingerprint in the
+#: header while running a build two versions old, so a feature that had shipped
+#: was simply missing with no way to tell why. The fingerprint comes from the
+#: API -- it reports what the SERVER has -- while the browser was still replaying
+#: an index.html it had cached, which points at the old bundle. Nothing was wrong
+#: with the deploy; the HTML was stale and said nothing about it.
+#:
+#: The filenames under /assets contain a content hash, so they are immutable by
+#: construction and safe to keep forever. index.html is the one file that must be
+#: re-fetched, because it is what names them.
+_HTML_CACHE = "no-cache, no-store, must-revalidate"
+_ASSET_CACHE = "public, max-age=31536000, immutable"
+
 if STATIC_DIR.is_dir():
-    app.mount("/assets", StaticFiles(directory=STATIC_DIR / "assets"), name="assets")
+    app.mount(
+        "/assets",
+        StaticFiles(directory=STATIC_DIR / "assets"),
+        name="assets",
+    )
+
+    @app.middleware("http")
+    async def _cache_headers(request, call_next):
+        """Immutable assets, never-cached HTML."""
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/assets/"):
+            response.headers.setdefault("Cache-Control", _ASSET_CACHE)
+        elif not path.startswith("/api/"):
+            response.headers["Cache-Control"] = _HTML_CACHE
+        return response
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def spa(full_path: str):
@@ -261,7 +292,9 @@ if STATIC_DIR.is_dir():
         candidate = STATIC_DIR / full_path
         if full_path and candidate.is_file():
             return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(
+            STATIC_DIR / "index.html", headers={"Cache-Control": _HTML_CACHE}
+        )
 
 else:  # pragma: no cover - dev without a built frontend
 

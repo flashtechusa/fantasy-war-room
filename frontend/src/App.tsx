@@ -31,6 +31,52 @@ const NAV = [
   { to: '/help', label: 'Help', icon: '❓' },
 ]
 
+/** The bundle THIS browser is running, read from the script tag that loaded it. */
+function runningBundle(): string {
+  try {
+    const tag = document.querySelector<HTMLScriptElement>(
+      'script[type="module"][src*="/assets/index-"]',
+    )
+    const match = /index-([A-Za-z0-9_-]+)\.js/.exec(tag?.src || import.meta.url)
+    return match ? match[1] : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Tell the user when their browser is running an old build.
+ *
+ * A cached index.html keeps pointing at the bundle it shipped with, so a phone
+ * can sit on a version from days ago while the header -- which asks the SERVER
+ * what it holds -- reports the current one. The deploy is fine; the HTML is
+ * stale, and nothing said so. A shipped feature just was not there.
+ *
+ * index.html is served no-store now, so this should stop happening. It is still
+ * worth saying when it does: the reload carries a cache-busting query because a
+ * browser that has already cached the HTML will otherwise serve it right back.
+ */
+function StaleBundleNotice({ serverBundle }: { serverBundle?: string }) {
+  const mine = runningBundle()
+  if (!serverBundle || !mine) return null
+  const theirs = /index-([A-Za-z0-9_-]+)\.js/.exec(serverBundle)?.[1] || ''
+  if (!theirs || theirs === mine) return null
+
+  return (
+    <button
+      className="btn sm primary"
+      style={{ flexShrink: 0 }}
+      title={`Running ${mine}, server has ${theirs}`}
+      onClick={() => {
+        window.location.href =
+          window.location.pathname + '?v=' + Date.now() + window.location.hash
+      }}
+    >
+      Update ready — reload
+    </button>
+  )
+}
+
 export default function App() {
   const auth = useAsync(() => api.me(), [])
   const health = useAsync(() => api.health(), [])
@@ -81,12 +127,19 @@ export default function App() {
             {health.data?.league?.source === 'demo' && ' · DEMO DATA'}
             {/* Which build is actually serving you. The VPS installs from a
                 zip, so there is no git checkout to ask, and "did the update
-                land?" was otherwise unanswerable from a phone. */}
+                land?" was otherwise unanswerable from a phone.
+
+                Two values, not one: what the SERVER holds, and what THIS browser
+                is running. They came apart in real use -- a cached index.html
+                kept a phone on a bundle two versions old while the header
+                faithfully reported the server's current one, so a shipped
+                feature was simply absent with nothing to explain it. */}
             {health.data?.build?.bundle && (
               <span className="faint"> · {health.data.build.bundle.slice(6, 14)}</span>
             )}
           </div>
         </div>
+        <StaleBundleNotice serverBundle={health.data?.build?.bundle} />
         <div className="row" style={{ gap: 10, flexShrink: 0, alignItems: 'center' }}>
           <div style={{ textAlign: 'right', minWidth: 0 }}>
             <div className="small" style={{ fontWeight: 650 }}>
