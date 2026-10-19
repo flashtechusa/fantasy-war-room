@@ -31,8 +31,20 @@ def _shape():
 
 def test_no_pro_team_means_not_signed():
     assert is_signed(_player(1, "Employed", "K", 9.0, pro_team="KC")) is True
-    for nobody in ("FA", "fa", "", "  ", "None", "-"):
+    # ESPN saying "no team" -- proTeamId 0, which reaches us as FA.
+    for nobody in ("FA", "fa", " FA ", "None", "-"):
         assert is_signed(_player(1, "Released", "K", 9.0, pro_team=nobody)) is False
+
+
+def test_an_unknown_team_is_not_treated_as_unemployed():
+    """Absence of data is not evidence of unemployment.
+
+    A blank pro team means we were never told -- true of demo data and of any
+    import path that does not fill the field. Excluding those would quietly empty
+    the wire for everyone, which is a far worse failure than the one being fixed.
+    """
+    for unknown in ("", "   "):
+        assert is_signed(_player(1, "Unknown", "WR", 9.0, pro_team=unknown)) is True
 
 
 def test_an_unsigned_upgrade_is_never_recommended():

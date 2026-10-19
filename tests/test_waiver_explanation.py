@@ -28,7 +28,10 @@ def wp(player_id: int, name: str, position: str, points: float, vor: float = 0.0
         espn_player_id=player_id,
         name=name,
         position=position,
-        pro_team="FA",
+        # An NFL team, not "FA". These are free agents in the FANTASY sense --
+        # availability below says so -- and conflating the two fields is the
+        # confusion that put an unsigned kicker at the top of the real wire.
+        pro_team="KC",
         week_points=round(points / 17, 2),
         season_points=points,
         vor=vor,

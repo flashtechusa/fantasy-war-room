@@ -31,9 +31,10 @@ PROTECTED_VOR = 25.0
 #: streamer lands in low single digits.
 FAAB_POINTS_PER_PERCENT = 1.6
 
-#: What ESPN's proTeamId 0 looks like by the time it reaches us: the player is
-#: on no NFL roster at all.
-NO_PRO_TEAM = {"", "FA", "NONE", "NULL", "-"}
+#: What ESPN's proTeamId 0 looks like by the time it reaches us: a positive
+#: statement that the player is on no NFL roster. An EMPTY value is deliberately
+#: not in here -- see is_signed.
+NO_PRO_TEAM = {"FA", "NONE", "NULL", "-"}
 
 
 def is_signed(player: WeeklyPlayer) -> bool:
@@ -44,8 +45,15 @@ def is_signed(player: WeeklyPlayer) -> bool:
     carried a projection -- ESPN publishes one from before he was released -- and
     nothing checked whether anybody employs him. A player with no NFL team takes
     no snaps and scores nothing, so he cannot be an upgrade at any price.
+
+    Unknown is not the same as unemployed. A blank pro team means we were never
+    told, which is true of demo data and of any import path that does not fill
+    the field; hiding those players would quietly empty the wire. Only ESPN
+    actually saying "no team" (proTeamId 0, which reaches us as FA) excludes
+    anybody.
     """
-    return (getattr(player, "pro_team", "") or "").strip().upper() not in NO_PRO_TEAM
+    team = (getattr(player, "pro_team", "") or "").strip().upper()
+    return team not in NO_PRO_TEAM
 
 
 @dataclass
