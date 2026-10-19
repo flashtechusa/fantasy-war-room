@@ -453,6 +453,7 @@ def import_players(
     records = provider.player_pool(
         limit=settings.player_pool_size, ppr=league.is_ppr, week=week
     )
+    _merge_recent_weeks(records, provider, settings, league, week)
     if not records:
         raise ImportError_("The provider returned an empty player pool.")
 
@@ -532,6 +533,45 @@ def import_players(
     session.commit()
     log.info("Imported %s players for season %s", imported, league.season)
     return imported
+
+
+def _merge_recent_weeks(records, provider, settings, league, week) -> None:
+    """Pull the previous couple of weeks so "lately" is more than one game.
+
+    ESPN returns weekly splits only for the scoring period you ask for, so a
+    single import gives exactly one week of results -- and "his last three games"
+    collapses to "his last game". That was live: a receiver whose last three read
+    17.9, 17.5 and 14.8 was reported as "14.8 lately", and the median that is
+    supposed to stop one outlier defining a player never had three numbers to
+    take a median of.
+
+    Each extra week is one more request, so this fetches only as many as the
+    recent window actually uses, and a failure is survivable: fewer weeks means
+    a shorter window, not a broken import.
+    """
+    from ..engine.form import RECENT_GAMES
+
+    if not week or week <= 1 or not records:
+        return
+    by_id = {r.espn_player_id: r for r in records}
+    for past in range(week - 1, max(week - RECENT_GAMES, 0), -1):
+        try:
+            earlier = provider.player_pool(
+                limit=settings.player_pool_size, ppr=league.is_ppr, week=past
+            )
+        except Exception:      # noqa: BLE001 - a short window beats no import
+            log.warning("Could not load week %s for recent form.", past)
+            continue
+        for record in earlier:
+            target = by_id.get(record.espn_player_id)
+            if target is None:
+                continue
+            target.weekly_actual_points.update(record.weekly_actual_points or {})
+            target.weekly_actual_stats.update(record.weekly_actual_stats or {})
+            # The projection for that week is worth keeping too: it is what the
+            # Week screen shows when you look back at a week already played.
+            target.weekly_points.update(record.weekly_points or {})
+            target.weekly_stats.update(record.weekly_stats or {})
 
 
 def _store_actuals(session: Session, actuals: dict, player: Player, record, now: datetime) -> None:

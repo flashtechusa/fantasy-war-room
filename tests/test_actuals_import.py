@@ -116,3 +116,85 @@ class TestTheRecentWindow:
             assert row.recent_source_points == 50.2
             assert row.recent_raw_stats[TARGETS] == 17
             assert row.last_week == 6
+
+
+class TestTheRecentWindowIsActuallyThreeGames:
+    """ESPN returns weekly splits only for the period you ask for.
+
+    One import gave one week of results, so "his last three games" collapsed to
+    "his last game" -- live, a receiver whose last three read 17.9, 17.5 and 14.8
+    was reported as "14.8 lately", and the median that exists to stop one outlier
+    defining a player never had three numbers to work with.
+    """
+
+    class _Provider:
+        """Returns one week of results per call, like ESPN does."""
+
+        source = "espn"
+        current_week = 6
+
+        def __init__(self):
+            self.weeks_asked: list[int] = []
+            self.results = {6: 14.8, 5: 17.5, 4: 17.9}
+
+        def player_pool(self, limit=600, ppr=False, week=None, free_agents_only=False):
+            self.weeks_asked.append(week)
+            from app.espn.client import PlayerRecord
+
+            record = PlayerRecord(
+                espn_player_id=11, name="Khalil Shakir", position="WR", pro_team="BUF"
+            )
+            points = self.results.get(week)
+            if points is not None:
+                record.weekly_actual_points = {week: points}
+                record.weekly_actual_stats = {week: {"58": 6}}
+            return [record]
+
+    def test_the_previous_weeks_are_fetched_and_merged(self):
+        from app.config import get_settings
+        from app.models import League
+        from app.services.importer import _merge_recent_weeks      # noqa: SLF001
+
+        provider = self._Provider()
+        records = provider.player_pool(week=6)
+        _merge_recent_weeks(
+            records, provider, get_settings(),
+            League(id=1, espn_league_id=1, season=2026, is_ppr=True), 6,
+        )
+
+        assert provider.weeks_asked == [6, 5, 4], provider.weeks_asked
+        assert records[0].weekly_actual_points == {4: 17.9, 5: 17.5, 6: 14.8}, (
+            "one game is not a recent window"
+        )
+
+    def test_week_one_asks_for_nothing_extra(self):
+        from app.config import get_settings
+        from app.models import League
+        from app.services.importer import _merge_recent_weeks      # noqa: SLF001
+
+        provider = self._Provider()
+        records = provider.player_pool(week=1)
+        _merge_recent_weeks(
+            records, provider, get_settings(),
+            League(id=1, espn_league_id=1, season=2026, is_ppr=True), 1,
+        )
+        assert provider.weeks_asked == [1], "there is nothing before week 1"
+
+    def test_a_failed_week_shortens_the_window_rather_than_breaking_it(self):
+        from app.config import get_settings
+        from app.models import League
+        from app.services.importer import _merge_recent_weeks      # noqa: SLF001
+
+        class _Flaky(self._Provider):
+            def player_pool(self, limit=600, ppr=False, week=None, free_agents_only=False):
+                if week == 5:
+                    raise RuntimeError("ESPN said no")
+                return super().player_pool(limit, ppr, week, free_agents_only)
+
+        provider = _Flaky()
+        records = provider.player_pool(week=6)
+        _merge_recent_weeks(
+            records, provider, get_settings(),
+            League(id=1, espn_league_id=1, season=2026, is_ppr=True), 6,
+        )
+        assert set(records[0].weekly_actual_points) == {4, 6}, "week 5 missing, rest intact"
