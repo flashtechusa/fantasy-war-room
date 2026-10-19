@@ -278,6 +278,26 @@ def _verdict(target: WaiverTarget, shape: LeagueShape) -> str:
     return "depth"
 
 
+def _form_reason(player: WeeklyPlayer) -> str | None:
+    """What he has actually been doing, when that is what moved his rating.
+
+    Said out loud because it is the answer to the question the screen kept
+    provoking: a receiver scoring 17.9, 17.5 and 14.8 looked no different from
+    his August projection, and there was no way to tell why he was or was not
+    recommended.
+    """
+    form = getattr(player, "form", None)
+    if form is None or not form.has_evidence:
+        return None
+    text = (
+        f"Averaging {form.points_per_game:.1f} pts a game over "
+        f"{form.games_played:.0f} game{'' if form.games_played == 1 else 's'}"
+    )
+    if form.recent_games:
+        text += f", {form.recent_points_per_game:.1f} over his last {form.recent_games:.0f}"
+    return text
+
+
 def _reasons(target: WaiverTarget, week: int, budget: int) -> list[str]:
     player = target.player
     out: list[str] = []
@@ -288,6 +308,10 @@ def _reasons(target: WaiverTarget, week: int, budget: int) -> list[str]:
         )
     else:
         out.append("Doesn't crack this week's lineup, but helps later")
+
+    form_line = _form_reason(player)
+    if form_line:
+        out.append(form_line)
 
     if target.season_gain > 0:
         out.append(f"Worth {target.season_gain:.1f} pts to your lineup rest-of-season")

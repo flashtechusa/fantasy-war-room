@@ -17,7 +17,8 @@ from ..engine.draft_math import DraftPosition, describe_position
 from ..engine.league_shape import LeagueShape
 from ..engine.scoring import LeagueScoring
 from ..engine.valuation import BoardResult, PlayerInput, ValuationEngine
-from ..models import League, Player, PlayerProjection, ProjectionSource
+from ..engine.form import SeasonForm, opportunities_in
+from ..models import League, Player, PlayerActuals, PlayerProjection, ProjectionSource
 
 
 class LeagueNotImported(RuntimeError):
@@ -62,6 +63,36 @@ def league_scoring(league: League) -> LeagueScoring:
             }
             for rule in league.scoring_rules
         ]
+    )
+
+
+def _season_form(
+    row: "PlayerActuals | None", position: str, scoring: LeagueScoring
+) -> SeasonForm | None:
+    """Turn a stored actuals row into the form the rating blend reads.
+
+    Scored under this league's rules from the raw line, falling back to ESPN's
+    own total when a stat line is missing -- the same contract the projections
+    follow, so a league's scoring applies to what happened as well as to what
+    was predicted.
+    """
+    if row is None or not row.games_played:
+        return None
+
+    points = scoring.score(row.raw_stats or {}, position) or float(row.source_points or 0.0)
+    recent = (
+        scoring.score(row.recent_raw_stats or {}, position)
+        or float(row.recent_source_points or 0.0)
+    )
+    return SeasonForm(
+        games_played=float(row.games_played or 0.0),
+        points=round(points, 2),
+        recent_games=float(row.recent_games or 0.0),
+        recent_points=round(recent, 2),
+        opportunities=opportunities_in(row.raw_stats or {}),
+        recent_opportunities=opportunities_in(row.recent_raw_stats or {}),
+        raw_stats=dict(row.raw_stats or {}),
+        recent_raw_stats=dict(row.recent_raw_stats or {}),
     )
 
 
@@ -217,6 +248,14 @@ def build_engine(
     for projection in session.scalars(select(PlayerProjection)).all():
         by_player.setdefault(projection.player_id, []).append(projection)
 
+    # What each player has actually done this season. Scored under THIS league's
+    # rules rather than ESPN's, for the same reason the projections are: a PPR
+    # league and a standard one disagree about what a catch was worth.
+    scoring = league_scoring(league)
+    actuals_by_player = {
+        row.player_id: row for row in session.scalars(select(PlayerActuals)).all()
+    }
+
     inputs: list[PlayerInput] = []
     for player in players:
         raw_stats, blended_points = _blend_raw_stats(by_player.get(player.id, []), weights)
@@ -237,11 +276,12 @@ def build_engine(
                 percent_owned=player.percent_owned,
                 rookie=player.rookie,
                 raw_stats=raw_stats,
+                form=_season_form(actuals_by_player.get(player.id), player.position, scoring),
             )
         )
 
     engine = ValuationEngine(
-        scoring=league_scoring(league),
+        scoring=scoring,
         shape=league_shape(league),
         players=inputs,
         source=league.source,

@@ -28,6 +28,7 @@ from .availability import (
     expected_best_available,
     measure_market_drift,
 )
+from .form import SeasonForm, blended_rate, explain
 from .league_shape import LeagueShape
 from .replacement import ReplacementLevels, compute_replacement_levels
 from .roster import (
@@ -102,6 +103,9 @@ class PlayerInput:
     percent_owned: float = 0.0
     rookie: bool = False
     raw_stats: dict[str, float] = field(default_factory=dict)
+    #: What he has actually done this season, when we know. None before a snap
+    #: is played, which is what keeps a preseason board identical to before.
+    form: "SeasonForm | None" = None
 
 
 @dataclass
@@ -236,6 +240,9 @@ class ValuationEngine:
         self.players = [p for p in players if p.position in FANTASY_POSITIONS]
         self.source = source
 
+        self._form: dict[int, SeasonForm | None] = {
+            p.espn_player_id: p.form for p in players
+        }
         self._points: dict[int, float] = {}
         for player in self.players:
             self._points[player.espn_player_id] = self._project(player)
@@ -281,19 +288,49 @@ class ValuationEngine:
     # -- projections -------------------------------------------------------
 
     def _project(self, player: PlayerInput) -> float:
-        """Score the raw stat line under our league's rules.
+        """What we expect from him over a season, in this league's scoring.
 
-        Falls back to ESPN's own applied total when a source gives us no raw
-        stats (so a player is never silently valued at zero).
+        Two parts. The projection is scored from the raw stat line under our own
+        rules (falling back to ESPN's applied total when a source gives us no raw
+        stats, so nobody is silently valued at zero). Then, once there are games
+        on the record, that projection is corrected by what he has actually been
+        doing -- see engine.form for the weighting.
+
+        The units do not change: this is still a full-season number, so every
+        caller that scales it by games remaining keeps working. With no games
+        played the result is byte-identical to the projection alone, which is
+        what makes switching the basis safe in the middle of a season.
         """
+        projection = 0.0
         if player.raw_stats:
-            points = self.scoring.score(player.raw_stats, player.position)
-            if points != 0.0:
-                return points
-        return round(player.espn_projected_points, 2)
+            projection = self.scoring.score(player.raw_stats, player.position)
+        if projection == 0.0:
+            projection = round(player.espn_projected_points, 2)
+
+        form = player.form
+        if form is None or not form.has_evidence:
+            return projection
+
+        games = max(player.projected_games or 17.0, 1.0)
+        blended = blended_rate(projection / games, form)
+        return round(blended * games, 2)
+
+    def rating_basis(self, player: PlayerInput) -> dict:
+        """The arithmetic behind one player's rating, for the screen that shows it."""
+        projection = 0.0
+        if player.raw_stats:
+            projection = self.scoring.score(player.raw_stats, player.position)
+        if projection == 0.0:
+            projection = round(player.espn_projected_points, 2)
+        games = max(player.projected_games or 17.0, 1.0)
+        return explain(projection / games, player.form)
 
     def points_for(self, player_id: int) -> float:
         return self._points.get(player_id, 0.0)
+
+    def form_for(self, player_id: int) -> SeasonForm | None:
+        """What this player has actually done, if we know. None before kickoff."""
+        return self._form.get(player_id)
 
     # -- upside / floor ----------------------------------------------------
 

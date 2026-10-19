@@ -22,6 +22,7 @@ from ..models import (
     LeagueTeam,
     Player,
     PlayerProjection,
+    PlayerActuals,
     PlayerWeeklyProjection,
     ProjectionSource,
     ScoringRule,
@@ -469,6 +470,9 @@ def import_players(
         (row.player_id, row.source_key, row.week): row
         for row in session.scalars(select(PlayerWeeklyProjection)).all()
     }
+    actuals = {
+        row.player_id: row for row in session.scalars(select(PlayerActuals)).all()
+    }
 
     now = datetime.now(timezone.utc)
     imported = 0
@@ -520,6 +524,7 @@ def import_players(
         projection.updated_at = now
 
         _store_weekly(session, weekly, player, source_key, record, now)
+        _store_actuals(session, actuals, player, record, now)
 
         imported += 1
 
@@ -527,6 +532,54 @@ def import_players(
     session.commit()
     log.info("Imported %s players for season %s", imported, league.season)
     return imported
+
+
+def _store_actuals(session: Session, actuals: dict, player: Player, record, now: datetime) -> None:
+    """Upsert what this player has actually done, season and lately.
+
+    The recent window is aggregated here rather than stored week by week: the
+    rating only ever asks how he has looked lately, and one row per player keeps
+    the read cheap on a hot path.
+    """
+    from ..engine.form import RECENT_GAMES
+
+    weekly_points = record.weekly_actual_points or {}
+    weekly_stats = record.weekly_actual_stats or {}
+    played = sorted(weekly_points)
+
+    recent_weeks = played[-RECENT_GAMES:]
+    recent_stats: dict[str, float] = {}
+    for week in recent_weeks:
+        for stat, value in (weekly_stats.get(week) or {}).items():
+            recent_stats[stat] = recent_stats.get(stat, 0.0) + float(value or 0)
+
+    row = actuals.get(player.id)
+    if row is None:
+        # The caller usually preloads every row, but not always -- look before
+        # inserting rather than trusting the cache and hitting the unique index.
+        row = session.scalars(
+            select(PlayerActuals).where(PlayerActuals.player_id == player.id)
+        ).first()
+    if row is None:
+        if not (record.games_played or weekly_points):
+            # Nothing has happened yet. No row rather than a row full of zeroes:
+            # "we have no evidence" is exactly what a missing row means to the
+            # rating, and a preseason pool would otherwise carry 600 empty ones.
+            return
+        row = PlayerActuals(player_id=player.id)
+        session.add(row)
+    actuals[player.id] = row
+
+    row.games_played = float(record.games_played or len(played))
+    row.raw_stats = record.actual_stats or {}
+    row.source_points = float(record.actual_points or 0.0)
+    row.recent_games = float(len(recent_weeks))
+    row.recent_raw_stats = recent_stats
+    row.recent_source_points = round(
+        sum(float(weekly_points.get(week) or 0.0) for week in recent_weeks), 2
+    )
+    row.last_week = played[-1] if played else 0
+    row.updated_at = now
 
 
 def _store_weekly(

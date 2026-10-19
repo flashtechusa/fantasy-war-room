@@ -124,6 +124,15 @@ class PlayerRecord:
     #: FREEAGENT / WAIVERS / ONTEAM
     availability: str = ""
     on_team_id: int | None = None
+    #: What he has ACTUALLY done this season (statSourceId 0, not 1): the season
+    #: stat line, and the same per week. Everything above is a projection; this
+    #: is the record, and the app had never read it.
+    actual_stats: dict[str, float] = field(default_factory=dict)
+    actual_points: float = 0.0
+    games_played: float = 0.0
+    #: {week: {stat_id: actual total}} for weeks he has played.
+    weekly_actual_stats: dict[int, dict[str, float]] = field(default_factory=dict)
+    weekly_actual_points: dict[int, float] = field(default_factory=dict)
 
 
 def _f(value: Any, default: float = 0.0) -> float:
@@ -614,6 +623,11 @@ class EspnClient:
 
         raw_stats, applied_total, projected_games = self._season_projection(player)
         weekly_stats, weekly_points = self._weekly_projections(player)
+        actual_stats, actual_points, games_played = self._season_actuals(player)
+        weekly_actual_stats, weekly_actual_points = self._weekly_actuals(player)
+        if not games_played:
+            # No games-played stat: the weeks he has a line for are the sample.
+            games_played = float(len(weekly_actual_points))
 
         injury_status = (player.get("injuryStatus") or "ACTIVE").upper()
 
@@ -639,6 +653,11 @@ class EspnClient:
             raw_stats=raw_stats,
             weekly_stats=weekly_stats,
             weekly_points=weekly_points,
+            actual_stats=actual_stats,
+            actual_points=actual_points,
+            games_played=games_played,
+            weekly_actual_stats=weekly_actual_stats,
+            weekly_actual_points=weekly_actual_points,
             availability=(entry.get("status") or "").upper(),
             on_team_id=_i(entry.get("onTeamId")),
         )
@@ -669,6 +688,53 @@ class EspnClient:
             stats_by_week[week] = {str(k): _f(v) for k, v in (stats.get("stats") or {}).items()}
             points_by_week[week] = round(_f(stats.get("appliedTotal"), 0.0), 2)
 
+        return (stats_by_week, points_by_week)
+
+    def _season_actuals(self, player: dict) -> tuple[dict[str, float], float, float]:
+        """Season-to-date ACTUALS: the stat line, the points, the games played.
+
+        ESPN marks results with `statSourceId == 0` -- the counterpart of the 1
+        we read for projections, sitting in the same `stats` array we already
+        fetch. Reading it costs no extra request; not reading it is why six weeks
+        of evidence were invisible to every rating in the app.
+        """
+        for stats in player.get("stats") or []:
+            if _i(stats.get("statSourceId"), -1) != 0:
+                continue          # projections, not results
+            if _i(stats.get("seasonId"), -1) != self.season:
+                continue
+            if _i(stats.get("statSplitTypeId"), -1) != 0:
+                continue          # weekly splits are handled separately
+            if _i(stats.get("scoringPeriodId"), -1) != 0:
+                continue          # 0 is the season total
+            raw = {str(k): _f(v) for k, v in (stats.get("stats") or {}).items()}
+            # Stat 210 is ESPN's own games-played count; fall back to counting
+            # the weeks he actually has a line for, since the blend's weight
+            # depends on the size of the sample.
+            games = _f(raw.get("210"), 0.0)
+            return (raw, round(_f(stats.get("appliedTotal"), 0.0), 2), games)
+        return ({}, 0.0, 0.0)
+
+    def _weekly_actuals(
+        self, player: dict
+    ) -> tuple[dict[int, dict[str, float]], dict[int, float]]:
+        """Per-week ACTUALS, so recent form can be told apart from September."""
+        stats_by_week: dict[int, dict[str, float]] = {}
+        points_by_week: dict[int, float] = {}
+        for stats in player.get("stats") or []:
+            if _i(stats.get("statSourceId"), -1) != 0:
+                continue
+            if _i(stats.get("seasonId"), -1) != self.season:
+                continue
+            if _i(stats.get("statSplitTypeId"), -1) != 1:
+                continue
+            week = _i(stats.get("scoringPeriodId"), 0) or 0
+            if week <= 0:
+                continue
+            stats_by_week[week] = {
+                str(k): _f(v) for k, v in (stats.get("stats") or {}).items()
+            }
+            points_by_week[week] = round(_f(stats.get("appliedTotal"), 0.0), 2)
         return (stats_by_week, points_by_week)
 
     def _season_projection(self, player: dict) -> tuple[dict[str, float], float, float]:

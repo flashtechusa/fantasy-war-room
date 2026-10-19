@@ -125,6 +125,10 @@ class TestInventedWeeklyPoints:
         def points_for(player_id):
             return 136.0      # a full season of kicking, projected in August
 
+        @staticmethod
+        def form_for(player_id):
+            return None       # nobody has played yet, as far as this stub knows
+
     def _build(self, monkeypatch, published: dict[int, float], week: int = 6):
         from app.models import Player
         from app.services import season as season_service

@@ -18,6 +18,8 @@ The three questions this answers:
 
 from __future__ import annotations
 
+from .form import SeasonForm
+
 from dataclasses import dataclass, field
 
 from .league_shape import LeagueShape
@@ -55,6 +57,9 @@ class WeeklyPlayer:
     #: out of them -- which means he is not expected to play at all. Distinct
     #: from an estimate: there is no number here, not a rough one.
     week_projection_missing: bool = False
+    #: Season-to-date production, when there is any. What the rating is corrected
+    #: by -- see engine.form.
+    form: "SeasonForm | None" = None
 
     @property
     def on_bye(self) -> bool:

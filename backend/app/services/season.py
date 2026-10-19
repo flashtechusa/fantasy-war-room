@@ -176,6 +176,7 @@ def build_weekly_players(
                 availability=player.availability,
                 week_projection_is_real=real,
                 week_projection_missing=missing,
+                form=engine.form_for(player.espn_player_id),
             )
         )
 

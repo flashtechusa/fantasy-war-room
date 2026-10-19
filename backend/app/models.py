@@ -243,6 +243,9 @@ class Player(Base):
     projections: Mapped[list["PlayerProjection"]] = relationship(
         back_populates="player", cascade="all, delete-orphan"
     )
+    actuals: Mapped["PlayerActuals | None"] = relationship(
+        back_populates="player", cascade="all, delete-orphan", uselist=False,
+    )
     weekly_projections: Mapped[list["PlayerWeeklyProjection"]] = relationship(
         back_populates="player", cascade="all, delete-orphan"
     )
@@ -293,6 +296,42 @@ class PlayerWeeklyProjection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     player: Mapped["Player"] = relationship(back_populates="weekly_projections")
+
+
+class PlayerActuals(Base):
+    """What a player has actually done this season. Results, not projections.
+
+    Everything else about a player in this schema is somebody's forecast. This
+    is the record: the season stat line, how many games it took, and the same
+    for his most recent games so that recent form can be told apart from
+    September. Stored raw, like the projections, so it can be re-scored under any
+    league's rules rather than frozen at one league's scoring.
+
+    The recent window is aggregated at import time rather than kept week by week:
+    the blend only ever asks "how has he looked lately", and one row per player
+    keeps the read on the hot path cheap.
+    """
+
+    __tablename__ = "player_actuals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    #: Games with a stat line this season -- the size of the evidence.
+    games_played: Mapped[float] = mapped_column(Float, default=0.0)
+    #: Season-to-date stat line, and ESPN's own applied total as a fallback.
+    raw_stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    source_points: Mapped[float] = mapped_column(Float, default=0.0)
+    #: The most recent games (see engine.form.RECENT_GAMES), aggregated.
+    recent_games: Mapped[float] = mapped_column(Float, default=0.0)
+    recent_raw_stats: Mapped[dict] = mapped_column(JSON, default=dict)
+    recent_source_points: Mapped[float] = mapped_column(Float, default=0.0)
+    #: The latest week he has a line for, so staleness is visible.
+    last_week: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    player: Mapped["Player"] = relationship(back_populates="actuals")
 
 
 class PlayerProjection(Base):
