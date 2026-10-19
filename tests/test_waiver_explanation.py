@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 
 from app.engine.league_shape import LeagueShape
-from app.engine.waivers import explain_by_position, recommend_waivers
+from app.engine.waivers import explain_by_position, recommend_waivers, upgrade_ids
 from app.engine.weekly import WeeklyPlayer
 
 SLOTS = {"QB": 1, "RB": 2, "WR": 2, "TE": 1, "FLEX": 1, "DST": 1, "K": 1}
@@ -63,12 +63,37 @@ def wire():
 
 
 class TestTheWireStillOnlyRecommendsWhatHelps:
-    def test_only_the_defences_are_recommended(self, roster, wire, shape):
+    def test_only_the_defences_upgrade_the_lineup(self, roster, wire, shape):
+        """Only DST beats what this roster already starts.
+
+        The rule used to be "a player who does not improve the starting lineup is
+        not a recommendation", which also meant the wire could never answer "help
+        me cover a bye". Upgrades and insurance are now both listed, so this
+        pins the part that still holds: nobody else is an UPGRADE.
+        """
         targets = recommend_waivers(
             roster=roster, free_agents=wire, shape=shape, week=1,
             faab_budget=100, roster_is_full=True,
         )
-        assert {t.player.position for t in targets} == {"DST"}
+        upgrades = {
+            t.player.position for t in targets
+            if t.season_gain > 0 or t.week_gain > 0
+        }
+        assert upgrades == {"DST"}
+
+    def test_anyone_else_listed_is_listed_as_insurance(self, roster, wire, shape):
+        targets = recommend_waivers(
+            roster=roster, free_agents=wire, shape=shape, week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        for target in targets:
+            if target.season_gain > 0 or target.week_gain > 0:
+                continue
+            assert target.verdict in {"insurance", "bye cover"}, target.verdict
+            assert target.insurance_gain > 0, (
+                "a player who improves nothing and covers nothing has no business "
+                "on the list"
+            )
 
 
 class TestEveryPositionIsAccountedFor:
@@ -77,9 +102,7 @@ class TestEveryPositionIsAccountedFor:
             roster=roster, free_agents=wire, shape=shape, week=1,
             faab_budget=100, roster_is_full=True,
         )
-        verdicts = explain_by_position(
-            roster, wire, shape, {t.player.espn_player_id for t in targets}
-        )
+        verdicts = explain_by_position(roster, wire, shape, upgrade_ids(targets))
         assert {v.position for v in verdicts} == {"QB", "RB", "WR", "TE", "K", "DST"}
 
     def test_a_rejected_position_names_the_player_who_blocked_it(
@@ -96,10 +119,11 @@ class TestEveryPositionIsAccountedFor:
             roster=roster, free_agents=wire, shape=shape, week=1,
             faab_budget=100, roster_is_full=True,
         )
-        verdicts = explain_by_position(
-            roster, wire, shape, {t.player.espn_player_id for t in targets}
-        )
+        verdicts = explain_by_position(roster, wire, shape, upgrade_ids(targets))
         assert next(v for v in verdicts if v.position == "DST").helps
+        # The per-position verdict still speaks about UPGRADES, which is what
+        # "helps" has always meant on that screen: this roster's quarterback is
+        # not beaten by anything on the wire.
         assert not next(v for v in verdicts if v.position == "QB").helps
 
 

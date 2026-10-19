@@ -486,6 +486,10 @@ export interface WaiverResponse {
     faab_pct: number
     verdict: string
     reasons: string[]
+    /** What he is worth if the starter in front of him is out. */
+    insurance_gain?: number
+    insures?: string
+    covers_byes?: number[]
   }[]
 }
 

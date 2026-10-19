@@ -26,6 +26,28 @@ from .weekly import WeeklyPlayer
 #: Never suggest dropping someone this far above replacement for a streamer.
 PROTECTED_VOR = 25.0
 
+#: What insurance is worth next to a starting upgrade.
+#:
+#: Asked for directly: "sometimes I am not looking to replace a starter, it is to
+#: improve my bench in case of a bye or if someone gets hurt." A backup only pays
+#: out when something goes wrong, so his value is discounted -- but not to zero,
+#: which is what it was. Byes are certain and injuries are near-certain across a
+#: season, so a bench that cannot cover either is a real weakness the wire can fix.
+INSURANCE_DISCOUNT = 0.35
+
+#: A bye you can actually cover is worth more than vague depth: it is a known
+#: hole in a known week, so it is not discounted as hard.
+BYE_COVER_DISCOUNT = 0.6
+
+#: How much of the starter a backup has to be worth before he counts as cover.
+#:
+#: Without a floor, "insurance" means "better than an empty slot", and every
+#: warm body on the wire qualifies -- the list becomes the wire itself and stops
+#: being a recommendation. If a man cannot give you a fifth of what the starter
+#: gives, he is not insurance: when that starter goes down you would stream
+#: somebody off the wire that week instead of having carried him all season.
+INSURANCE_FLOOR_SHARE = 0.2
+
 #: FAAB: the share of your remaining budget a full-point upgrade is worth.
 #: Tuned so a genuine league-winner lands near a third of the budget and a
 #: streamer lands in low single digits.
@@ -75,7 +97,13 @@ class WaiverTarget:
     faab_bid: int
     faab_pct: float
     reasons: list[str] = field(default_factory=list)
-    verdict: str = "depth"      # must-add | starter | streamer | depth | stash
+    verdict: str = "depth"      # must-add | starter | streamer | depth | stash | insurance
+    #: What he adds when the starter in front of him is out -- the bench case.
+    insurance_gain: float = 0.0
+    #: The starter he would be covering for.
+    insures: str = ""
+    #: Upcoming weeks where a starter at his position is on bye and he is not.
+    covers_byes: list[int] = field(default_factory=list)
 
 
 def _lineup_points(
@@ -84,6 +112,94 @@ def _lineup_points(
     return build_optimal_lineup(
         [p.as_roster_player(use_week=use_week) for p in roster], shape
     ).total_points
+
+
+def upgrade_ids(targets: list["WaiverTarget"]) -> set[int]:
+    """Just the targets who beat what you already start.
+
+    The per-position summary answers "is anybody out there better than my guy",
+    so it has to be told about upgrades only. Insurance belongs on the list -- a
+    bench that cannot cover a bye is a real weakness -- but it is not an answer
+    to that question, and letting it count would have the summary say a position
+    is covered when nothing on the wire beats the incumbent.
+    """
+    return {
+        t.player.espn_player_id for t in targets
+        if t.season_gain > 0 or t.week_gain > 0
+    }
+
+
+def _starters(roster: list[WeeklyPlayer], shape: LeagueShape) -> list[WeeklyPlayer]:
+    """Who is currently holding a starting slot, on rest-of-season value."""
+    lineup = build_optimal_lineup(
+        [p.as_roster_player(use_week=False) for p in roster], shape
+    )
+    by_id = {p.espn_player_id: p for p in roster}
+    return [
+        by_id[a.player.espn_player_id]
+        for a in lineup.starters
+        if a.player and a.player.espn_player_id in by_id
+    ]
+
+
+def insurance_value(
+    roster: list[WeeklyPlayer],
+    shape: LeagueShape,
+    candidate: WeeklyPlayer,
+    drop: WeeklyPlayer | None,
+) -> tuple[float, str]:
+    """What he is worth if the man in front of him goes down.
+
+    The lineup gain alone says nothing about a backup: a receiver who does not
+    crack your starting three scores a flat zero and is dropped from the list,
+    however good he is. But a bench exists precisely for the week a starter is
+    out, so the question worth asking is what your lineup looks like THEN -- with
+    him on the roster versus without.
+
+    Returns the best case across your starters at his position, and who it covers.
+    """
+    kept = [
+        p for p in roster
+        if drop is None or p.espn_player_id != drop.espn_player_id
+    ]
+    best_gain, covering = 0.0, ""
+    for starter in _starters(kept, shape):
+        if starter.position != candidate.position:
+            continue
+        without = [p for p in kept if p.espn_player_id != starter.espn_player_id]
+        base = _lineup_points(without, shape, use_week=False)
+        with_him = _lineup_points(without + [candidate], shape, use_week=False)
+        gain = with_him - base
+        if gain < starter.season_points * INSURANCE_FLOOR_SHARE:
+            continue      # better than nothing is not the same as insurance
+        if gain > best_gain:
+            best_gain, covering = gain, starter.name
+    return (round(best_gain, 2), covering)
+
+
+def bye_weeks_covered(
+    roster: list[WeeklyPlayer],
+    shape: LeagueShape,
+    candidate: WeeklyPlayer,
+    week: int,
+) -> list[int]:
+    """Upcoming byes at his position that he would be available for.
+
+    A bye is a hole you can see coming, which makes it the easiest thing on the
+    wire to plan for -- and the thing a bench is most obviously for.
+    """
+    out: list[int] = []
+    for starter in _starters(roster, shape):
+        if starter.position != candidate.position:
+            continue
+        bye = starter.bye_week
+        if not bye or bye <= week:
+            continue
+        if candidate.bye_week == bye:
+            continue      # he is off that week too; no help at all
+        if bye not in out:
+            out.append(bye)
+    return sorted(out)
 
 
 def _droppable(
@@ -228,9 +344,13 @@ def recommend_waivers(
 
         week_gain = round(_lineup_points(trial, shape, use_week=True) - base_week, 2)
         season_gain = round(_lineup_points(trial, shape, use_week=False) - base_season, 2)
+        # Not every useful addition changes today's lineup. A backup is bought
+        # for the week a starter is out, so ask what the lineup looks like then.
+        insurance, insures = insurance_value(roster, shape, candidate, drop)
+        byes = bye_weeks_covered(roster, shape, candidate, week)
 
-        if week_gain <= 0 and season_gain <= 0:
-            continue     # doesn't improve anything; not a recommendation
+        if week_gain <= 0 and season_gain <= 0 and insurance <= 0:
+            continue     # helps neither the lineup nor the bench behind it
 
         targets.append(
             WaiverTarget(
@@ -241,6 +361,9 @@ def recommend_waivers(
                 priority=0.0,
                 faab_bid=0,
                 faab_pct=0.0,
+                insurance_gain=insurance,
+                insures=insures,
+                covers_byes=byes,
             )
         )
 
@@ -251,7 +374,16 @@ def recommend_waivers(
     # because a wrong week costs you once and a wrong season costs you all year.
     peak = max(t.season_gain * 0.7 + t.week_gain * 0.3 for t in targets) or 1.0
     for target in targets:
-        blended = target.season_gain * 0.7 + target.week_gain * 0.3
+        # Insurance counts, at a discount: it only pays out when something goes
+        # wrong. A bye is a certainty rather than a risk, so it counts for more.
+        cover = INSURANCE_DISCOUNT
+        if target.covers_byes:
+            cover = BYE_COVER_DISCOUNT
+        blended = (
+            target.season_gain * 0.7
+            + target.week_gain * 0.3
+            + target.insurance_gain * cover
+        )
         target.priority = round(max(0.0, min(100.0, 100.0 * blended / peak)), 1)
 
         if budget > 0:
@@ -267,6 +399,10 @@ def recommend_waivers(
 
 
 def _verdict(target: WaiverTarget, shape: LeagueShape) -> str:
+    # A player who changes nothing today but covers a hole behind your starters
+    # is a different kind of add, and saying so is the whole point of listing him.
+    if target.season_gain <= 0 and target.week_gain <= 0 and target.insurance_gain > 0:
+        return "bye cover" if target.covers_byes else "insurance"
     if target.season_gain >= 25:
         return "must-add"
     if target.season_gain >= 10:
@@ -308,6 +444,19 @@ def _reasons(target: WaiverTarget, week: int, budget: int) -> list[str]:
         )
     else:
         out.append("Doesn't crack this week's lineup, but helps later")
+
+    if target.insurance_gain > 0:
+        if target.covers_byes:
+            weeks = ", ".join(str(w) for w in target.covers_byes)
+            out.append(
+                f"Covers your week {weeks} bye at {player.position}"
+                + (f" ({target.insures})" if target.insures else "")
+            )
+        if target.insures:
+            out.append(
+                f"Worth {target.insurance_gain:.1f} pts to your lineup if "
+                f"{target.insures} misses time"
+            )
 
     form_line = _form_reason(player)
     if form_line:

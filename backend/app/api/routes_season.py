@@ -389,7 +389,7 @@ def waivers(
     )
 
     verdicts = explain_by_position(
-        roster, free_agents, shape, {t.player.espn_player_id for t in targets}
+        roster, free_agents, shape, waiver_rules.upgrade_ids(targets)
     )
 
     return {
@@ -431,6 +431,11 @@ def waivers(
                 "faab_pct": t.faab_pct,
                 "verdict": t.verdict,
                 "reasons": t.reasons,
+                # The bench case: what he is worth when a starter is out, and
+                # which byes he would cover.
+                "insurance_gain": t.insurance_gain,
+                "insures": t.insures,
+                "covers_byes": t.covers_byes,
             }
             for t in targets
         ],

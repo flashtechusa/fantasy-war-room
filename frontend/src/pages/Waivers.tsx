@@ -11,6 +11,9 @@ const VERDICT_COLOR: Record<string, string> = {
   streamer: 'var(--warn)',
   stash: 'var(--accent)',
   depth: 'var(--fair)',
+  // Bench adds: not upgrades, and the card should not dress them up as one.
+  insurance: 'var(--accent)',
+  'bye cover': 'var(--warn)',
 }
 
 /**
@@ -255,9 +258,15 @@ export default function Waivers() {
               </div>
               <div className="cell">
                 <span className="v">
-                  {target.season_gain > 0 ? `+${target.season_gain.toFixed(0)}` : '—'}
+                  {target.season_gain > 0
+                    ? `+${target.season_gain.toFixed(0)}`
+                    : (target.insurance_gain ?? 0) > 0
+                      ? `+${target.insurance_gain!.toFixed(0)}`
+                      : '—'}
                 </span>
-                <span className="l">Rest of yr</span>
+                <span className="l">
+                  {target.season_gain > 0 ? 'Rest of yr' : 'If starter out'}
+                </span>
               </div>
               <div className="cell">
                 <span className="v">{target.player.percent_owned.toFixed(0)}%</span>
