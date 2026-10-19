@@ -15,6 +15,7 @@ from ..db import get_db
 from ..engine.roster_move import active_roster_limit, analyse_roster_move
 from ..engine.trades import analyse_trade
 from ..engine.valuation import ValuationEngine
+from ..engine import waivers as waiver_rules
 from ..engine.waivers import explain_by_position, recommend_waivers
 from ..engine.weekly import WeeklyPlayer, optimise_lineup
 from datetime import timedelta
@@ -337,6 +338,13 @@ def waivers(
     for ids in season_service.rosters_by_team(session, league).values():
         rostered_everywhere |= ids
     everyone = [p for p in everyone if p.espn_player_id not in rostered_everywhere]
+    # A player on no NFL roster scores nothing, whatever projection ESPN still
+    # carries for him. Filtered HERE, before the per-position cut below, because
+    # an unsigned player who survives into the top-N for his position pushes a
+    # real candidate out of the pool entirely.
+    signed = [p for p in everyone if waiver_rules.is_signed(p)]
+    unsigned_hidden = len(everyone) - len(signed)
+    everyone = signed
     by_position: dict[str, list] = {}
     for player in everyone:
         by_position.setdefault(player.position, []).append(player)
@@ -378,6 +386,9 @@ def waivers(
     return {
         "week": week,
         "espn_sync": _sync_stamp(session, league),
+        # Said out loud rather than filtered silently: a quiet exclusion invites
+        # the opposite question ("why isn't he on my wire?").
+        "unsigned_hidden": unsigned_hidden,
         "roster_size": len(roster),
         "roster_is_full": len(roster) >= shape.roster_size,
         "free_agents_considered": len(free_agents),

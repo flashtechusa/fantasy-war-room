@@ -31,6 +31,22 @@ PROTECTED_VOR = 25.0
 #: streamer lands in low single digits.
 FAAB_POINTS_PER_PERCENT = 1.6
 
+#: What ESPN's proTeamId 0 looks like by the time it reaches us: the player is
+#: on no NFL roster at all.
+NO_PRO_TEAM = {"", "FA", "NONE", "NULL", "-"}
+
+
+def is_signed(player: WeeklyPlayer) -> bool:
+    """Whether this player is actually on an NFL roster.
+
+    Reported from real use: an unsigned kicker was the number one waiver target,
+    with a suggested bid and a real running back named as the drop. He still
+    carried a projection -- ESPN publishes one from before he was released -- and
+    nothing checked whether anybody employs him. A player with no NFL team takes
+    no snaps and scores nothing, so he cannot be an upgrade at any price.
+    """
+    return (getattr(player, "pro_team", "") or "").strip().upper() not in NO_PRO_TEAM
+
 
 @dataclass
 class DropCandidate:
@@ -116,6 +132,8 @@ def explain_by_position(
     candidate who does not improve the lineup is dropped silently, so the
     screen could only ever show the one position where the wire wins.
     """
+    # "The best out there" has to mean someone who can actually play.
+    free_agents = [p for p in free_agents if is_signed(p)]
     lineup = build_optimal_lineup(
         [p.as_roster_player(use_week=False) for p in roster], shape
     )
@@ -182,6 +200,9 @@ def recommend_waivers(
     limit: int = 15,
 ) -> list[WaiverTarget]:
     """Rank the wire by how much each addition actually improves your lineup."""
+    # Enforced here rather than at the caller so every path -- the Waivers screen,
+    # Auto Mode's claims -- is covered by one rule.
+    free_agents = [p for p in free_agents if is_signed(p)]
     if not free_agents:
         return []
 

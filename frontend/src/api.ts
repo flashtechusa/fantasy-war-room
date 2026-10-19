@@ -454,6 +454,8 @@ export interface LineupResponse {
 export interface WaiverResponse {
   week: number
   espn_sync?: EspnSync
+  /** Wire players left out because they are on no NFL roster. */
+  unsigned_hidden?: number
   roster_size: number
   roster_is_full: boolean
   free_agents_considered: number

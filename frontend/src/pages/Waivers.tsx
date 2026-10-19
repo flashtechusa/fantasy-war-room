@@ -143,6 +143,13 @@ export default function Waivers() {
               Roster {data.roster_size} · {data.roster_is_full ? 'full' : 'has space'}
               {data.uses_faab && ` · $${data.faab_budget} FAAB`}
             </div>
+            {(data.unsigned_hidden ?? 0) > 0 && (
+              <div className="tiny faint">
+                {data.unsigned_hidden} wire player
+                {data.unsigned_hidden === 1 ? '' : 's'} hidden — on no NFL roster, so
+                they score nothing whatever projection ESPN still carries.
+              </div>
+            )}
             <div style={{ marginTop: 4 }}>
               <EspnSyncLine sync={data.espn_sync} onSynced={waivers.reload} />
             </div>
