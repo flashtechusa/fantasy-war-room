@@ -8,6 +8,8 @@ part is.
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -19,6 +21,8 @@ from ..engine.scoring import LeagueScoring
 from ..engine.valuation import BoardResult, PlayerInput, ValuationEngine
 from ..engine.form import SeasonForm, opportunities_in
 from ..models import League, Player, PlayerActuals, PlayerProjection, ProjectionSource
+
+log = logging.getLogger(__name__)
 
 
 class LeagueNotImported(RuntimeError):
@@ -261,9 +265,21 @@ def build_engine(
     # rules rather than ESPN's, for the same reason the projections are: a PPR
     # league and a standard one disagree about what a catch was worth.
     scoring = league_scoring(league)
-    actuals_by_player = {
-        row.player_id: row for row in session.scalars(select(PlayerActuals)).all()
-    }
+    try:
+        actuals_by_player = {
+            row.player_id: row for row in session.scalars(select(PlayerActuals)).all()
+        }
+    except Exception:      # noqa: BLE001 - see below
+        # Production record unavailable: rate everyone on their projection, which
+        # is exactly what this app did until recently. A correction to a rating
+        # is an enhancement, and an enhancement whose data source is unreadable
+        # must degrade rather than take every screen down with it. This fired for
+        # real -- a column added to the table a day after it shipped was missing
+        # on an install that had the first version, and a 500 on every page is a
+        # severe answer to "we cannot refine the numbers today".
+        log.warning("Could not read season actuals; rating on projections alone.")
+        session.rollback()
+        actuals_by_player = {}
 
     inputs: list[PlayerInput] = []
     for player in players:

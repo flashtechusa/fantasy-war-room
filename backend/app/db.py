@@ -95,6 +95,14 @@ _ADDED_COLUMNS: dict[str, dict[str, str]] = {
         "can_send_trades": "BOOLEAN",
         "can_auto_mode": "BOOLEAN",
     },
+    # player_actuals shipped without this column and gained it a day later.
+    # create_all only CREATES tables, it never alters one that already exists, so
+    # an install that took the first version had a table the new code queried a
+    # missing column on -- which is this whole mechanism's reason for existing,
+    # and which a test suite building a fresh database every run can never catch.
+    "player_actuals": {
+        "recent_weeks": "JSON",
+    },
 }
 
 
