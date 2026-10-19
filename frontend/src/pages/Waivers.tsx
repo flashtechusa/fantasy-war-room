@@ -1,9 +1,143 @@
 /** Phase 8 -- waiver wire. */
 
 import { useState } from 'react'
-import { api, type WaiverApplyResult } from '../api'
+import { api, type PlayerExplain, type WaiverApplyResult } from '../api'
 import { Banner, Card, EspnSyncLine, InjuryTag, Loading, Pos } from '../components'
 import { useAsync } from '../useAsync'
+
+/**
+ * "Why not him?" -- ask about one player by name.
+ *
+ * Three rounds of screenshots went into answering that question about a single
+ * receiver, because the wire drops a candidate who does not help silently. The
+ * rules that run before any ranking -- already rostered, no NFL team, outside
+ * the pool -- are invisible from the outside, so this asks the app directly and
+ * shows whichever applied, with the arithmetic behind it.
+ */
+function WhyNotHim() {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [answer, setAnswer] = useState<PlayerExplain | null>(null)
+  const [err, setErr] = useState<string | null>(null)
+
+  async function ask(query: string) {
+    if (query.trim().length < 3) return
+    setBusy(true)
+    setErr(null)
+    try {
+      setAnswer(await api.explainPlayer(query.trim()))
+    } catch (e) {
+      setErr((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rating = answer?.rating
+  const math = answer?.math
+
+  return (
+    <Card title="Why not him?">
+      <div className="small muted" style={{ marginBottom: 8 }}>
+        Wondering why somebody isn't on the list? Ask.
+      </div>
+      <form
+        className="row"
+        style={{ gap: 8, flexWrap: 'wrap' }}
+        onSubmit={(event) => {
+          event.preventDefault()
+          ask(name)
+        }}
+      >
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Player name"
+          aria-label="Player name"
+          style={{ flex: '1 1 180px', minWidth: 0 }}
+        />
+        <button className="btn sm primary" disabled={busy || name.trim().length < 3}>
+          {busy ? 'Checking…' : 'Ask'}
+        </button>
+      </form>
+
+      {err && <div style={{ marginTop: 8 }}><Banner kind="error">{err}</Banner></div>}
+
+      {answer && !answer.found && (
+        <div style={{ marginTop: 10 }}>
+          <Banner kind="info">{answer.reason}</Banner>
+          {(answer.candidates ?? []).length > 0 && (
+            <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+              {(answer.candidates ?? []).map((c) => (
+                <button
+                  key={c.espn_player_id}
+                  className="btn sm"
+                  onClick={() => { setName(c.name); ask(c.name) }}
+                >
+                  {c.name} ({c.position} · {c.pro_team})
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {answer?.found && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontWeight: 700 }}>
+            {answer.player?.name}{' '}
+            <span className="small muted">
+              {answer.player?.position} · {answer.player?.pro_team}
+            </span>
+          </div>
+          <div className="small" style={{ marginTop: 4 }}>{answer.verdict}</div>
+
+          {rating && (
+            <div className="tiny faint" style={{ marginTop: 8 }}>
+              {rating.basis === 'blended' ? (
+                <>
+                  Rated on {rating.games_played} game
+                  {rating.games_played === 1 ? '' : 's'} of production:{' '}
+                  {rating.actual_per_game}/gm this season, {rating.recent_per_game}/gm
+                  lately, against a {rating.projection_per_game}/gm preseason
+                  projection — weighted {Math.round((rating.evidence_weight ?? 0) * 100)}%
+                  toward what he has actually done
+                  {(rating.usage_multiplier ?? 1) !== 1 && (
+                    <> , and {(rating.usage_multiplier ?? 1) > 1 ? 'up' : 'down'} on usage
+                      ({rating.recent_opportunities_per_game}/gm lately vs{' '}
+                      {rating.opportunities_per_game}/gm)</>
+                  )}
+                  . Rating: <strong>{rating.blended_per_game}/gm</strong>.
+                </>
+              ) : (
+                <>
+                  No games on the record yet, so he's rated on his preseason
+                  projection alone: {rating.projection_per_game}/gm.
+                </>
+              )}
+            </div>
+          )}
+
+          {math && (
+            <div className="tiny" style={{ marginTop: 8 }}>
+              <div className="faint">
+                Upgrade: {math.season_gain > 0 ? `+${math.season_gain.toFixed(1)}` : 'none'} ·
+                This week: {math.week_gain > 0 ? `+${math.week_gain.toFixed(1)}` : 'none'} ·
+                Cover: {math.insurance_gain > 0
+                  ? `+${math.insurance_gain.toFixed(1)}${math.insures ? ` for ${math.insures}` : ''}`
+                  : 'none'}
+                {math.covers_byes.length > 0 && ` · Byes: ${math.covers_byes.join(', ')}`}
+              </div>
+              {math.drop && (
+                <div className="faint">Would cost dropping {math.drop.name}.</div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
 
 const VERDICT_COLOR: Record<string, string> = {
   'must-add': 'var(--elite)',
@@ -183,6 +317,8 @@ export default function Waivers() {
           {refreshing ? 'Refreshing…' : 'Refresh free agents from ESPN'}
         </button>
       </Card>
+
+      <WhyNotHim />
 
       {/* A wire that returns one position reads as broken. It usually isn't --
           it means everything else you start already beats what is out there --

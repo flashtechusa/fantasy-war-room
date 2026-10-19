@@ -286,6 +286,177 @@ def start_sit(
 
 
 # ---------------------------------------------------------------------------
+# "Why not him?" -- one player, and what the app thinks of him
+# ---------------------------------------------------------------------------
+
+
+def _rating_basis(engine, espn_player_id: int) -> dict | None:
+    """Where this player's rating came from -- projection, production, or both."""
+    source = next(
+        (p for p in getattr(engine, "players", []) if p.espn_player_id == espn_player_id),
+        None,
+    )
+    if source is None:
+        return None
+    try:
+        return engine.rating_basis(source)
+    except Exception:      # noqa: BLE001 - an explanation is never worth a 500
+        return None
+
+
+@router.get("/player-explain")
+def player_explain(
+    name: str = Query("", description="Part of a player's name."),
+    espn_player_id: int | None = Query(None, description="Exact id, if you have it."),
+    week: int | None = Query(None, ge=1, le=18),
+    session: Session = Depends(get_db),
+    league: League = Depends(league_dep),
+    engine: ValuationEngine = Depends(engine_dep),
+    settings: Settings = Depends(settings_dep),
+) -> dict:
+    """Why a particular player is, or is not, a recommendation.
+
+    Asked for after three rounds of screenshots about one receiver: the wire
+    drops a candidate who does not help, silently and with no way to ask why.
+    Every exclusion the ranking applies is reported here in the order it applies,
+    with the arithmetic behind it -- including the rules that run BEFORE any
+    ranking, which are the ones nobody can see from the outside.
+    """
+    from ..engine import waivers as rules
+
+    week = _resolve_week(week, settings)
+    pool = session.scalars(
+        select(Player).where(
+            Player.season == league.season, Player.source == league.source
+        )
+    ).all()
+
+    if espn_player_id is not None:
+        matches = [p for p in pool if p.espn_player_id == espn_player_id]
+    else:
+        needle = (name or "").strip().lower()
+        if len(needle) < 3:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Give me at least three letters of a name.",
+            )
+        matches = [p for p in pool if needle in (p.name or "").lower()]
+
+    if not matches:
+        return {
+            "found": False,
+            "searched": name or str(espn_player_id),
+            "reason": (
+                "Nobody by that name is in this league's player pool. If he was "
+                "just signed or called up, hit Refresh players on the League screen."
+            ),
+        }
+    if len(matches) > 1:
+        return {
+            "found": False,
+            "ambiguous": True,
+            "searched": name,
+            "candidates": [
+                {"espn_player_id": p.espn_player_id, "name": p.name,
+                 "position": p.position, "pro_team": p.pro_team}
+                for p in matches[:10]
+            ],
+            "reason": "More than one player matches. Pick one.",
+        }
+
+    row = matches[0]
+    scored = season_service.build_weekly_players(
+        session, league, engine, week, espn_player_ids={row.espn_player_id}
+    )
+    player = scored[0] if scored else None
+    my_ids = season_service.my_roster_ids(session, league)
+
+    who_has_him = None
+    for team in league.teams:
+        if any(
+            entry.get("espn_player_id") == row.espn_player_id
+            for entry in (team.roster or [])
+        ):
+            who_has_him = team.name
+            break
+
+    out: dict = {
+        "found": True,
+        "week": week,
+        "player": _serialize_player(player) if player else {
+            "espn_player_id": row.espn_player_id, "name": row.name,
+            "position": row.position, "pro_team": row.pro_team,
+        },
+        "rating": _rating_basis(engine, row.espn_player_id),
+        "rostered_by": who_has_him,
+        "on_my_team": row.espn_player_id in my_ids,
+    }
+
+    # The exclusions, in the order the ranking applies them.
+    if row.espn_player_id in my_ids:
+        out["verdict"] = "You already have him."
+        return out
+    if who_has_him:
+        out["verdict"] = f"{who_has_him} has him, so he is not available."
+        return out
+    if player is not None and not rules.is_signed(player):
+        out["verdict"] = (
+            "He is on no NFL roster, so he cannot score. Players without a team "
+            "are kept off the wire however good their old projection looks."
+        )
+        return out
+    if player is None:
+        out["verdict"] = "He is in the pool but has no scoring data yet."
+        return out
+
+    # He is available: show the arithmetic the ranking would have done.
+    roster = season_service.build_weekly_players(
+        session, league, engine, week, espn_player_ids=my_ids
+    )
+    shape = league_shape(league)
+    targets = recommend_waivers(
+        roster=roster, free_agents=[player], shape=shape, week=week,
+        faab_budget=league.acquisition_budget,
+        faab_remaining=settings.faab_remaining,
+        roster_is_full=len(roster) >= shape.roster_size,
+        limit=1,
+    )
+    if targets:
+        t = targets[0]
+        out["math"] = {
+            "week_gain": t.week_gain, "season_gain": t.season_gain,
+            "insurance_gain": t.insurance_gain, "insures": t.insures,
+            "covers_byes": t.covers_byes, "verdict": t.verdict,
+            "drop": _serialize_player(t.drop) if t.drop else None,
+            "reasons": t.reasons,
+        }
+        out["verdict"] = (
+            f"Worth adding ({t.verdict}): "
+            + (t.reasons[0] if t.reasons else "he improves your team.")
+        )
+        return out
+
+    # He helps nothing -- say what he was measured against rather than going quiet.
+    insurance, insures = rules.insurance_value(roster, shape, player, None)
+    best = max(
+        (p for p in roster if p.position == player.position),
+        key=lambda p: p.season_points, default=None,
+    )
+    out["math"] = {
+        "week_gain": 0.0, "season_gain": 0.0,
+        "insurance_gain": insurance, "insures": insures, "covers_byes": [],
+        "verdict": "no gain", "drop": None, "reasons": [],
+    }
+    out["verdict"] = (
+        f"He does not beat anyone you start at {player.position}"
+        + (f" (your best is {best.name})" if best else "")
+        + ", and he is not worth enough as cover behind them to be worth a "
+        "roster spot."
+    )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Waivers
 # ---------------------------------------------------------------------------
 

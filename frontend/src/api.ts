@@ -493,6 +493,42 @@ export interface WaiverResponse {
   }[]
 }
 
+/** The answer to "why don't you recommend him?" for one player. */
+export interface PlayerExplain {
+  found: boolean
+  searched?: string
+  reason?: string
+  ambiguous?: boolean
+  candidates?: { espn_player_id: number; name: string; position: string; pro_team: string }[]
+  week?: number
+  player?: WeekPlayer
+  rating?: {
+    basis: string
+    projection_per_game: number
+    actual_per_game?: number
+    recent_per_game?: number
+    games_played: number
+    evidence_weight?: number
+    usage_multiplier?: number
+    opportunities_per_game?: number
+    recent_opportunities_per_game?: number
+    blended_per_game?: number
+  } | null
+  rostered_by?: string | null
+  on_my_team?: boolean
+  verdict?: string
+  math?: {
+    week_gain: number
+    season_gain: number
+    insurance_gain: number
+    insures: string
+    covers_byes: number[]
+    verdict: string
+    drop: WeekPlayer | null
+    reasons: string[]
+  }
+}
+
 export interface TradeSide {
   label: string
   gives: WeekPlayer[]
@@ -1162,6 +1198,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ api_key, import_now }),
     }),
+
+  // "Why not him?" -- one player, and every rule the ranking applied to him.
+  explainPlayer: (name: string) =>
+    request<PlayerExplain>(`/api/season/player-explain?name=${encodeURIComponent(name)}`),
 
   // Pull rosters + league settings from ESPN right now, ignoring the timer --
   // for a move you just made in the ESPN app.
