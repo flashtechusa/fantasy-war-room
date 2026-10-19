@@ -490,6 +490,8 @@ export interface WaiverResponse {
     insurance_gain?: number
     insures?: string
     covers_byes?: number[]
+    /** Rest-of-season value over the player he would replace. */
+    depth_gain?: number
   }[]
 }
 
@@ -522,6 +524,7 @@ export interface PlayerExplain {
     season_gain: number
     insurance_gain: number
     insures: string
+    depth_gain: number
     covers_byes: number[]
     verdict: string
     drop: WeekPlayer | null

@@ -104,6 +104,10 @@ class WaiverTarget:
     insures: str = ""
     #: Upcoming weeks where a starter at his position is on bye and he is not.
     covers_byes: list[int] = field(default_factory=list)
+    #: Rest-of-season value he has over the player he would replace. The
+    #: straight question a bench add actually poses -- "is he better than the guy
+    #: I would cut?" -- which the screen never answered out loud.
+    depth_gain: float = 0.0
 
 
 def _lineup_points(
@@ -170,8 +174,15 @@ def insurance_value(
         base = _lineup_points(without, shape, use_week=False)
         with_him = _lineup_points(without + [candidate], shape, use_week=False)
         gain = with_him - base
-        if gain < starter.season_points * INSURANCE_FLOOR_SHARE:
-            continue      # better than nothing is not the same as insurance
+        if gain <= 0:
+            continue
+        if candidate.vor <= 0 and gain < starter.season_points * INSURANCE_FLOOR_SHARE:
+            # Two tiers, because the floor exists to keep warm bodies out, not
+            # to reject a useful backup. A player above replacement level is by
+            # definition worth a roster spot if he has to play, so any gain
+            # counts. One below it still has to clear the old bar -- otherwise
+            # "better than an empty slot" makes every free agent insurance.
+            continue
         if gain > best_gain:
             best_gain, covering = gain, starter.name
     return (round(best_gain, 2), covering)
@@ -348,6 +359,9 @@ def recommend_waivers(
         # for the week a starter is out, so ask what the lineup looks like then.
         insurance, insures = insurance_value(roster, shape, candidate, drop)
         byes = bye_weeks_covered(roster, shape, candidate, week)
+        depth = round(
+            candidate.season_points - (drop.season_points if drop else 0.0), 2
+        )
 
         if week_gain <= 0 and season_gain <= 0 and insurance <= 0:
             continue     # helps neither the lineup nor the bench behind it
@@ -364,6 +378,7 @@ def recommend_waivers(
                 insurance_gain=insurance,
                 insures=insures,
                 covers_byes=byes,
+                depth_gain=depth,
             )
         )
 
@@ -444,6 +459,12 @@ def _reasons(target: WaiverTarget, week: int, budget: int) -> list[str]:
         )
     else:
         out.append("Doesn't crack this week's lineup, but helps later")
+
+    if target.drop is not None and target.depth_gain > 0 and target.season_gain <= 0:
+        out.append(
+            f"Straight bench upgrade on {target.drop.name}: "
+            f"{target.depth_gain:.0f} more points the rest of the way"
+        )
 
     if target.insurance_gain > 0:
         if target.covers_byes:

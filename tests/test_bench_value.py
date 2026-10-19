@@ -143,3 +143,88 @@ class TestInsuranceValueItself:
         assert deep_gain < thin_gain, (
             "insurance is worth less when somebody already covers the position"
         )
+
+
+class TestTheDropHasToBeUsable:
+    """Reported from real use: the wire named a running back sitting on IR as
+    the man to cut for a receiver.
+
+    Dropping an IR player frees an IR slot, not the active roster spot an add
+    needs -- so the move gains nothing and costs a player. A player on IR also
+    cannot be started, so he has no business in the lineup maths either. The
+    route passes the ACTIVE roster for both reasons; these pin the engine's half
+    of the contract.
+    """
+
+    def test_whoever_is_handed_in_is_who_can_be_dropped(self):
+        # The engine drops from the roster it is given, so an IR player kept out
+        # of that list can never be suggested.
+        active = _roster()      # no IR player in it
+        target = recommend_waivers(
+            roster=active, free_agents=[_p(120, "New WR", "WR", 150)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )[0]
+        assert target.drop is not None
+        assert target.drop.espn_player_id in {p.espn_player_id for p in active}
+
+    def test_a_starter_is_never_the_drop(self):
+        target = recommend_waivers(
+            roster=_roster(), free_agents=[_p(121, "New WR", "WR", 150)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )[0]
+        assert target.drop.name == "Spare Part", target.drop.name
+
+
+class TestTheSwapIsStatedPlainly:
+    """"I have two receivers on my bench; this would be a replacement for one of
+    them." The screen never answered that question -- whether he beats the man
+    he would replace -- so the add read as pointless.
+    """
+
+    def test_depth_gain_is_the_difference_over_the_dropped_player(self):
+        target = recommend_waivers(
+            roster=_roster(), free_agents=[_p(122, "Better Than Spare", "WR", 150)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )[0]
+        # Spare Part is worth 20; the candidate 150.
+        assert target.depth_gain == 130.0
+        assert any("bench upgrade" in r.lower() for r in target.reasons), target.reasons
+
+    def test_an_upgrade_does_not_get_the_bench_line(self):
+        # When he beats a starter, "straight bench upgrade" is the wrong framing.
+        target = recommend_waivers(
+            roster=_roster(), free_agents=[_p(123, "Stud WR", "WR", 260)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )[0]
+        assert target.season_gain > 0
+        assert not any("bench upgrade" in r.lower() for r in target.reasons)
+
+
+class TestTheInsuranceFloorDoesNotRejectUsefulBackups:
+    """The floor exists to keep warm bodies out, not to reject a real backup.
+
+    A player above replacement level is by definition worth a spot if he has to
+    play, so any gain counts for him. One below it still has to clear the old
+    bar, or "better than an empty slot" makes every free agent insurance.
+    """
+
+    def test_an_above_replacement_backup_counts_on_a_modest_gain(self):
+        roster = _roster() + [_p(300, "Existing WR3", "WR", 140)]
+        candidate = _p(301, "Slightly Better", "WR", 155)
+        candidate.vor = 12.0      # above replacement at the position
+
+        targets = recommend_waivers(
+            roster=roster, free_agents=[candidate], shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets, "a useful backup must not be rejected for a modest edge"
+        assert targets[0].insurance_gain > 0
+
+    def test_a_below_replacement_body_still_has_to_clear_the_bar(self):
+        junk = _p(302, "Junk WR", "WR", 2)
+        junk.vor = -30.0
+        targets = recommend_waivers(
+            roster=_roster(), free_agents=[junk], shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets == []

@@ -323,6 +323,7 @@ def player_explain(
     ranking, which are the ones nobody can see from the outside.
     """
     from ..engine import waivers as rules
+    from ..services import automode
 
     week = _resolve_week(week, settings)
     pool = session.scalars(
@@ -409,10 +410,17 @@ def player_explain(
         out["verdict"] = "He is in the pool but has no scoring data yet."
         return out
 
-    # He is available: show the arithmetic the ranking would have done.
+    # He is available: show the arithmetic the ranking would have done -- on the
+    # same active roster the ranking uses, IR players excluded.
     roster = season_service.build_weekly_players(
         session, league, engine, week, espn_player_ids=my_ids
     )
+    mine = season_service.my_team(session, league)
+    on_ir = {
+        pid for pid, slot in (automode.current_slots_by_id(mine) if mine else {}).items()
+        if (slot or "").upper() == "IR"
+    }
+    roster = [p for p in roster if p.espn_player_id not in on_ir]
     shape = league_shape(league)
     targets = recommend_waivers(
         roster=roster, free_agents=[player], shape=shape, week=week,
@@ -426,6 +434,7 @@ def player_explain(
         out["math"] = {
             "week_gain": t.week_gain, "season_gain": t.season_gain,
             "insurance_gain": t.insurance_gain, "insures": t.insures,
+            "depth_gain": t.depth_gain,
             "covers_byes": t.covers_byes, "verdict": t.verdict,
             "drop": _serialize_player(t.drop) if t.drop else None,
             "reasons": t.reasons,
@@ -444,7 +453,8 @@ def player_explain(
     )
     out["math"] = {
         "week_gain": 0.0, "season_gain": 0.0,
-        "insurance_gain": insurance, "insures": insures, "covers_byes": [],
+        "insurance_gain": insurance, "insures": insures, "depth_gain": 0.0,
+        "covers_byes": [],
         "verdict": "no gain", "drop": None, "reasons": [],
     }
     out["verdict"] = (
@@ -549,7 +559,12 @@ def waivers(
     }
     active_roster = [p for p in roster if p.espn_player_id not in ir_ids]
     targets = recommend_waivers(
-        roster=roster,
+        # The ACTIVE roster, not everyone. A player on IR cannot be started, so
+        # he must not appear in the lineup maths -- and dropping him frees an IR
+        # slot, not the active spot an add needs, so he must not be offered as
+        # the drop either. Reported from real use: the wire named a running back
+        # sitting on IR as the man to cut.
+        roster=active_roster,
         free_agents=free_agents,
         shape=shape,
         week=week,
@@ -607,6 +622,7 @@ def waivers(
                 "insurance_gain": t.insurance_gain,
                 "insures": t.insures,
                 "covers_byes": t.covers_byes,
+                "depth_gain": t.depth_gain,
             }
             for t in targets
         ],
