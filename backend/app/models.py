@@ -327,6 +327,10 @@ class PlayerActuals(Base):
     recent_games: Mapped[float] = mapped_column(Float, default=0.0)
     recent_raw_stats: Mapped[dict] = mapped_column(JSON, default=dict)
     recent_source_points: Mapped[float] = mapped_column(Float, default=0.0)
+    #: Each recent game on its own: [{"week": 6, "points": 29.0, "stats": {...}}].
+    #: Kept separate from the aggregate because one outlier must not be allowed
+    #: to define "lately" -- the rating takes the median of these, not the mean.
+    recent_weeks: Mapped[list] = mapped_column(JSON, default=list)
     #: The latest week he has a line for, so staleness is visible.
     last_week: Mapped[int] = mapped_column(Integer, default=0)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

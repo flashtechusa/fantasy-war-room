@@ -84,7 +84,15 @@ def _season_form(
         scoring.score(row.recent_raw_stats or {}, position)
         or float(row.recent_source_points or 0.0)
     )
+    # Each recent game scored under this league's rules, so the median below is
+    # measured in the same currency as everything else.
+    per_week: list[float] = []
+    for entry in (row.recent_weeks or []):
+        scored = scoring.score(entry.get("stats") or {}, position)
+        per_week.append(round(scored or float(entry.get("points") or 0.0), 2))
+
     return SeasonForm(
+        position=position,
         games_played=float(row.games_played or 0.0),
         points=round(points, 2),
         recent_games=float(row.recent_games or 0.0),
@@ -93,6 +101,7 @@ def _season_form(
         recent_opportunities=opportunities_in(row.recent_raw_stats or {}),
         raw_stats=dict(row.raw_stats or {}),
         recent_raw_stats=dict(row.recent_raw_stats or {}),
+        recent_week_points=per_week,
     )
 
 

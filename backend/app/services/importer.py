@@ -578,6 +578,14 @@ def _store_actuals(session: Session, actuals: dict, player: Player, record, now:
     row.recent_source_points = round(
         sum(float(weekly_points.get(week) or 0.0) for week in recent_weeks), 2
     )
+    row.recent_weeks = [
+        {
+            "week": week,
+            "points": float(weekly_points.get(week) or 0.0),
+            "stats": weekly_stats.get(week) or {},
+        }
+        for week in recent_weeks
+    ]
     row.last_week = played[-1] if played else 0
     row.updated_at = now
 

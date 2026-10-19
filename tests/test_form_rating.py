@@ -158,3 +158,62 @@ class TestTheArithmeticIsShowable:
         detail = explain(8.0, None)
         assert detail["basis"] == "projection"
         assert detail["games_played"] == 0
+
+
+class TestOneBigGameIsNotAnIdentity:
+    """Reported from real use: the Titans defence was recommended as a pickup.
+
+    Their season: 1.0, 11.0, 12.0, 5.0, 5.0, 29.0. That last game was two
+    interceptions, a fumble recovery and six sacks -- the kind of afternoon that
+    does not repeat. Averaging the last three made them a 13-point-a-game
+    defence; they are a 5-point-a-game defence that had one good Sunday.
+
+    Two corrections. "Lately" is the median of the recent games rather than the
+    mean, so a spike cannot define a player. And defences and kickers regress
+    harder than anyone, so their production has to clear a higher bar before it
+    outweighs the projection.
+    """
+
+    @staticmethod
+    def _titans():
+        return SeasonForm(
+            position="DST", games_played=6, points=63.0,
+            recent_games=3, recent_points=39.0,
+            recent_week_points=[5.0, 5.0, 29.0],
+        )
+
+    def test_the_typical_recent_game_is_not_the_best_one(self):
+        assert self._titans().recent_points_per_game == 5.0, (
+            "5, 5 and 29 is a 5-point defence with one good week"
+        )
+
+    def test_the_rating_lands_near_the_projection(self):
+        rated = blended_rate(7.0, self._titans())
+        assert 6.5 < rated < 8.0, rated
+
+    def test_a_defence_needs_more_evidence_than_a_runner(self):
+        assert evidence_weight(6, position="DST") < evidence_weight(6, position="RB")
+        assert evidence_weight(6, position="K") < evidence_weight(6, position="RB")
+        # Unknown positions keep the default.
+        assert evidence_weight(6, position="") == evidence_weight(6)
+
+    def test_consistency_survives_the_median(self):
+        """The other half of the rule: a genuinely hot player must not be flattened."""
+        shakir = SeasonForm(
+            position="WR", games_played=6, points=73.0,
+            recent_games=3, recent_points=50.2,
+            recent_week_points=[17.9, 17.5, 14.8],
+            opportunities=32, recent_opportunities=17,
+        )
+        assert shakir.recent_points_per_game == 17.5
+        assert blended_rate(8.0, shakir) > 12.0, (
+            "three good games in a row is a real signal, not an outlier"
+        )
+
+    def test_fewer_than_three_games_falls_back_to_the_mean(self):
+        # A median of two numbers says nothing useful about a spike.
+        form = SeasonForm(
+            position="WR", games_played=2, points=30.0,
+            recent_games=2, recent_points=30.0, recent_week_points=[2.0, 28.0],
+        )
+        assert form.recent_points_per_game == 15.0

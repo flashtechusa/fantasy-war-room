@@ -39,6 +39,16 @@ from dataclasses import dataclass, field
 #: September do not erase a preseason consensus.
 EVIDENCE_HALF_LIFE_GAMES = 4.0
 
+#: Some positions tell you much less about themselves than others.
+#:
+#: Reported from real use: a defence with one 29-point game (two picks, a fumble
+#: and six sacks) was recommended as a pickup off the back of it. Defensive
+#: scoring is dominated by turnovers and return touchdowns, which barely repeat;
+#: kickers depend on how often someone else stalls in field-goal range. Six games
+#: of a defence is simply weaker evidence than six games of a running back, so
+#: production has to clear a higher bar before it outweighs the projection.
+POSITION_HALF_LIFE = {"DST": 10.0, "K": 8.0}
+
 #: How many recent games count as "lately".
 RECENT_GAMES = 3
 
@@ -59,10 +69,22 @@ USAGE_MIN_OPPORTUNITIES = 6.0
 OPPORTUNITY_STAT_IDS = ("58", "23", "0")
 
 
+def median(values: list[float]) -> float:
+    """The middle value -- the typical game, not the best one."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
 @dataclass
 class SeasonForm:
     """What a player has actually done this season, as far as we know."""
 
+    position: str = ""
     games_played: float = 0.0
     #: Season-to-date fantasy points under this league's rules.
     points: float = 0.0
@@ -75,6 +97,8 @@ class SeasonForm:
     #: Raw stat lines, kept so a screen can show the usage behind the number.
     raw_stats: dict[str, float] = field(default_factory=dict)
     recent_raw_stats: dict[str, float] = field(default_factory=dict)
+    #: Each recent game on its own, so one outlier cannot define "lately".
+    recent_week_points: list[float] = field(default_factory=list)
 
     @property
     def has_evidence(self) -> bool:
@@ -86,6 +110,16 @@ class SeasonForm:
 
     @property
     def recent_points_per_game(self) -> float:
+        """What he scores in a typical recent game.
+
+        The median, not the mean, once there are three to look at. A defence with
+        5, 5 and 29 did not become a 13-point defence; it had one week where the
+        turnovers fell its way. The median says 5, which is what you should
+        expect next Sunday. For a player whose recent games are all good it
+        barely moves the number at all -- consistency survives, spikes do not.
+        """
+        if len(self.recent_week_points) >= 3:
+            return median(self.recent_week_points)
         return self.recent_points / self.recent_games if self.recent_games else 0.0
 
 
@@ -98,10 +132,20 @@ def opportunities_in(raw_stats: dict[str, float]) -> float:
     return sum(float(raw_stats.get(stat, 0) or 0) for stat in OPPORTUNITY_STAT_IDS)
 
 
-def evidence_weight(games_played: float, half_life: float = EVIDENCE_HALF_LIFE_GAMES) -> float:
-    """How much of the rating actual production should carry, 0-1."""
+def evidence_weight(
+    games_played: float,
+    half_life: float = EVIDENCE_HALF_LIFE_GAMES,
+    position: str = "",
+) -> float:
+    """How much of the rating actual production should carry, 0-1.
+
+    Longer half-life for the positions that tell you least about themselves: see
+    POSITION_HALF_LIFE.
+    """
     if games_played <= 0:
         return 0.0
+    if position:
+        half_life = POSITION_HALF_LIFE.get(position.upper(), half_life)
     return round(games_played / (games_played + half_life), 4)
 
 
@@ -148,7 +192,7 @@ def blended_rate(projection_rate: float, form: SeasonForm | None) -> float:
     if form is None or not form.has_evidence:
         return projection_rate
 
-    weight = evidence_weight(form.games_played)
+    weight = evidence_weight(form.games_played, position=form.position)
     base = (1 - weight) * projection_rate + weight * actual_rate(form)
     return round(max(base * usage_multiplier(form), 0.0), 4)
 
@@ -161,7 +205,7 @@ def explain(projection_rate: float, form: SeasonForm | None) -> dict:
             "projection_per_game": round(projection_rate, 2),
             "games_played": 0,
         }
-    weight = evidence_weight(form.games_played)
+    weight = evidence_weight(form.games_played, position=form.position)
     usage = usage_multiplier(form)
     return {
         "basis": "blended",
