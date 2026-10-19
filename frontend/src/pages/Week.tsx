@@ -582,6 +582,23 @@ export default function Week() {
         </Card>
       )}
 
+      {(data.no_projection?.length ?? 0) > 0 && (
+        <Card title="Not expected to play">
+          <div className="small muted">
+            ESPN published week-{data.week} projections and left these players out
+            of them, so they're shown at zero rather than given an estimate. That
+            usually means no NFL team, inactive, or out for the season:
+          </div>
+          <div className="row wrap" style={{ gap: 5, marginTop: 8 }}>
+            {(data.no_projection ?? []).map((name) => (
+              <span key={name} className="pill">
+                {name}
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {data.estimated_projections.length > 0 && (
         <Card title="Estimated numbers">
           <div className="small muted">

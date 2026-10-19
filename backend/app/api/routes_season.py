@@ -53,6 +53,7 @@ def _serialize_player(player: WeeklyPlayer) -> dict:
         "percent_owned": player.percent_owned,
         "on_bye": player.on_bye,
         "week_projection_is_real": player.week_projection_is_real,
+        "week_projection_missing": player.week_projection_missing,
     }
 
 
@@ -204,7 +205,13 @@ def start_sit(
     except Exception:      # noqa: BLE001 - a preview must never break the screen
         log.warning("Could not compute pending lineup moves (non-fatal).")
 
-    estimated = [p.name for p in roster if not p.week_projection_is_real]
+    # Two different states, and conflating them reads as a broken screen: an
+    # estimate is a rough number, a missing projection is no number at all.
+    estimated = [
+        p.name for p in roster
+        if not p.week_projection_is_real and not p.week_projection_missing
+    ]
+    not_playing = [p.name for p in roster if p.week_projection_missing]
     # ESPN publishes real per-week splits only a short way ahead. Past that the
     # fallback is the season total spread evenly, which is the *same number
     # every week* -- so consecutive future weeks look identical and the screen
@@ -253,6 +260,8 @@ def start_sit(
         ],
         "unfilled_slots": result.unfilled_slots,
         "estimated_projections": estimated,
+        # ESPN published this week and left these players out of it.
+        "no_projection": not_playing,
         # What ESPN has RIGHT NOW, so the screen can show where its recommendation
         # differs from your actual lineup. Without this the Start table reads as a
         # statement of fact ("he IS starting") rather than advice ("he SHOULD").

@@ -112,18 +112,34 @@ def build_weekly_players(
 
     players = session.scalars(stmt).all()
     remaining_weeks = max(league.regular_season_weeks - week + 1, 1)
+    # Did ESPN publish week-N projections at all? If it did, being absent from
+    # them is information: that player is not expected to play.
+    week_is_published = bool(week_points)
 
     out: list[WeeklyPlayer] = []
     for player in players:
         if player.position not in KNOWN_POSITIONS:
             continue
         season_points = engine.points_for(player.espn_player_id)
+        missing = False
 
         if player.espn_player_id in week_points:
             points = week_points[player.espn_player_id]
             real = True
+        elif week_is_published:
+            # Reported from real use: an unsigned kicker was handed 9.7 points a
+            # week and became the top waiver target. The number came from here --
+            # his preseason season projection, divided by the weeks, for a man on
+            # no NFL roster. ESPN projects whoever is expected to play; leaving
+            # someone out of a published week is the answer, not a gap to fill
+            # with an August estimate.
+            points = 0.0
+            real = False
+            missing = True
         else:
-            # No weekly split: spread what's left of the season evenly.
+            # Nothing published for this week yet (a future week): the season
+            # total spread evenly is the only estimate available, and the screen
+            # labels it as such.
             points = round(season_points / max(league.regular_season_weeks, 1), 2)
             real = False
 
@@ -159,6 +175,7 @@ def build_weekly_players(
                 percent_owned=player.percent_owned,
                 availability=player.availability,
                 week_projection_is_real=real,
+                week_projection_missing=missing,
             )
         )
 

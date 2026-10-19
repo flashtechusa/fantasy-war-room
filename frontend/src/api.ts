@@ -405,6 +405,8 @@ export interface WeekPlayer {
   percent_owned: number
   on_bye: boolean
   week_projection_is_real: boolean
+  /** ESPN published this week and left him out: not expected to play. */
+  week_projection_missing?: boolean
 }
 
 /** When our copy of the ESPN roster was last pulled. */
@@ -446,6 +448,8 @@ export interface LineupResponse {
   close_calls: { slot: string; starting: string | null; over: string | null; margin: number }[]
   unfilled_slots: string[]
   estimated_projections: string[]
+  /** Players ESPN published no week-N projection for: not expected to play. */
+  no_projection?: string[]
   projection_basis: 'espn_weekly' | 'season_average' | 'mixed' | 'none'
   estimated_count: number
   roster_count: number

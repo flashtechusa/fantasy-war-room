@@ -51,6 +51,10 @@ class WeeklyPlayer:
     #: True when the projection came from a real weekly split rather than a
     #: season total divided by the games remaining.
     week_projection_is_real: bool = True
+    #: True when ESPN published projections for this week and left this player
+    #: out of them -- which means he is not expected to play at all. Distinct
+    #: from an estimate: there is no number here, not a rough one.
+    week_projection_missing: bool = False
 
     @property
     def on_bye(self) -> bool:

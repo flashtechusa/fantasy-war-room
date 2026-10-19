@@ -71,3 +71,102 @@ def test_the_best_available_is_never_an_unsigned_player():
     assert named and named[0] == "Real Kicker", (
         '"the best out there" has to mean someone who can actually play'
     )
+
+
+class TestInventedWeeklyPoints:
+    """Where the unsigned kicker's points actually came from.
+
+    He had no week-6 projection -- ESPN does not project a man with no team --
+    so the fallback handed him his preseason season total divided by the weeks:
+    about 9.7 points a week, enough to beat a top-four kicker and top the wire.
+
+    ESPN projects whoever is expected to play. Being left out of a week it HAS
+    published is the answer, not a gap to fill with an August estimate. A week
+    it has not published yet is different: there the season average is the only
+    estimate available, and the screen says so.
+    """
+
+    @staticmethod
+    def _league():
+        from app.models import League
+
+        return League(
+            id=1, espn_league_id=1, season=2026, source="espn",
+            regular_season_weeks=14, roster_slots={"K": 1}, bench_slots=2,
+        )
+
+    class _Engine:
+        """Minimal stand-in: everyone carries a big preseason projection."""
+
+        shape = None
+        allow_fantasypros = False
+        scoring = None
+
+        class _Replacement:
+            @staticmethod
+            def vor(position, points):
+                return points
+
+        replacement = _Replacement()
+
+        @staticmethod
+        def points_for(player_id):
+            return 136.0      # a full season of kicking, projected in August
+
+    def _build(self, monkeypatch, published: dict[int, float], week: int = 6):
+        from app.models import Player
+        from app.services import season as season_service
+
+        players = [
+            Player(
+                id=1, espn_player_id=11, season=2026, source="espn",
+                name="Released Kicker", position="K", pro_team="FA",
+            ),
+            Player(
+                id=2, espn_player_id=22, season=2026, source="espn",
+                name="Employed Kicker", position="K", pro_team="HOU",
+            ),
+        ]
+
+        class _Scalars:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def all(self):
+                return self._rows
+
+        class _Session:
+            def scalars(self, *a, **k):
+                return _Scalars(players)
+
+        monkeypatch.setattr(
+            season_service, "weekly_points_by_player", lambda *a, **k: published
+        )
+        return season_service.build_weekly_players(
+            _Session(), self._league(), self._Engine(), week
+        )
+
+    def test_a_player_left_out_of_a_published_week_scores_nothing(self, monkeypatch):
+        # ESPN published week 6 and projected only the employed kicker.
+        out = {p.name: p for p in self._build(monkeypatch, {22: 8.3})}
+
+        assert out["Released Kicker"].week_points == 0.0, (
+            "no projection must not become an invented one"
+        )
+        assert out["Released Kicker"].week_projection_missing is True
+        assert out["Released Kicker"].week_projection_is_real is False
+
+        assert out["Employed Kicker"].week_points == 8.3
+        assert out["Employed Kicker"].week_projection_missing is False
+
+    def test_an_unpublished_week_still_gets_the_season_average(self, monkeypatch):
+        # Nothing published for the week at all -- a future week. The estimate is
+        # the only number available, and it is labelled, not suppressed.
+        out = {p.name: p for p in self._build(monkeypatch, {})}
+
+        for player in out.values():
+            assert player.week_points > 0, "a future week still needs an estimate"
+            assert player.week_projection_is_real is False
+            assert player.week_projection_missing is False, (
+                "an estimate is not the same as a missing projection"
+            )
