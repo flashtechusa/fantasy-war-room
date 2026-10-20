@@ -554,7 +554,12 @@ def _merge_recent_weeks(records, provider, settings, league, week) -> None:
     if not week or week <= 1 or not records:
         return
     by_id = {r.espn_player_id: r for r in records}
-    for past in range(week - 1, max(week - RECENT_GAMES, 0), -1):
+    # Reach back further than the window is wide. Calendar weeks are not games:
+    # the current week has not been played, and a bye eats another. Asking for
+    # exactly three weeks gave the 49ers two games and the Bengals -- on their
+    # bye -- one, and "lately" then meant a single afternoon again. Two weeks of
+    # slack covers a bye plus the week in progress.
+    for past in range(week - 1, max(week - (RECENT_GAMES + 2), 0), -1):
         try:
             earlier = provider.player_pool(
                 limit=settings.player_pool_size, ppr=league.is_ppr, week=past

@@ -508,8 +508,11 @@ def _form_reason(player: WeeklyPlayer) -> str | None:
         f"Averaging {form.points_per_game:.1f} pts a game over "
         f"{form.games_played:.0f} game{'' if form.games_played == 1 else 's'}"
     )
-    if form.recent_games:
+    if form.recent_games >= 2:
         text += f", {form.recent_points_per_game:.1f} over his last {form.recent_games:.0f}"
+    # One game is not a trend, and the rating does not treat it as one -- it uses
+    # the season rate instead. Printing "14.4 over his last 1" while showing that
+    # season rate was telling the user something that was not true.
     return text
 
 

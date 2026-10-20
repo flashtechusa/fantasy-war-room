@@ -162,7 +162,9 @@ class TestTheRecentWindowIsActuallyThreeGames:
             League(id=1, espn_league_id=1, season=2026, is_ppr=True), 6,
         )
 
-        assert provider.weeks_asked == [6, 5, 4], provider.weeks_asked
+        # Reaches back past the window's width: the current week is unplayed and
+        # a bye can eat another, so three calendar weeks is not three games.
+        assert provider.weeks_asked == [6, 5, 4, 3, 2], provider.weeks_asked
         assert records[0].weekly_actual_points == {4: 17.9, 5: 17.5, 6: 14.8}, (
             "one game is not a recent window"
         )
@@ -179,6 +181,32 @@ class TestTheRecentWindowIsActuallyThreeGames:
             League(id=1, espn_league_id=1, season=2026, is_ppr=True), 1,
         )
         assert provider.weeks_asked == [1], "there is nothing before week 1"
+
+    def test_a_bye_does_not_shorten_the_window(self):
+        """The reported case: the Bengals were on bye in week 6.
+
+        Fetching only weeks 6 and 5 left one game, and "lately" meant a single
+        afternoon -- exactly what the median was added to prevent.
+        """
+        from app.config import get_settings
+        from app.models import League
+        from app.services.importer import _merge_recent_weeks      # noqa: SLF001
+
+        class _WithABye(self._Provider):
+            def __init__(self):
+                super().__init__()
+                # No week 6: their bye. Results run 5, 4, 3.
+                self.results = {5: 14.0, 4: 10.0, 3: 5.0}
+
+        provider = _WithABye()
+        records = provider.player_pool(week=7)
+        _merge_recent_weeks(
+            records, provider, get_settings(),
+            League(id=1, espn_league_id=1, season=2026, is_ppr=True), 7,
+        )
+        assert set(records[0].weekly_actual_points) == {3, 4, 5}, (
+            "a bye must not cost the window two of its three games"
+        )
 
     def test_a_failed_week_shortens_the_window_rather_than_breaking_it(self):
         from app.config import get_settings
