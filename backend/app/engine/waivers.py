@@ -259,6 +259,61 @@ def bye_weeks_covered(
     return sorted(out)
 
 
+def choose_drop(
+    roster: list[WeeklyPlayer],
+    shape: LeagueShape,
+    candidate: WeeklyPlayer,
+    droppable: list[DropCandidate],
+    free_agents: list[WeeklyPlayer],
+) -> WeeklyPlayer | None:
+    """Who to cut for this particular addition.
+
+    Reported from real use: adding a defence, the app said "drop Juwan Johnson
+    (TE)" -- leaving the user with two defences, one fewer tight end, and the
+    old defence rotting on the bench. He was going to drop the Jaguars, which is
+    obviously right and which the app could not suggest, because _droppable
+    refuses to touch a starter and the Jaguars were his only defence.
+
+    The man a new starter replaces is a candidate for the cut. Once a better
+    defence is on the roster the old one starts nothing, and a second defence is
+    worth almost nothing besides -- you stream one the week you need it. So the
+    choice is made on what the roster actually loses: the lineup it can field
+    afterwards first, and where that ties, whoever is worth least as cover.
+    """
+    options: list[WeeklyPlayer] = [c.player for c in droppable]
+
+    # The incumbent this addition would bench, if he is not needed elsewhere.
+    with_candidate = build_optimal_lineup(
+        [p.as_roster_player(use_week=False) for p in roster + [candidate]], shape
+    )
+    starting_now = {s.player.espn_player_id for s in with_candidate.starters if s.player}
+    for player in roster:
+        if player.position != candidate.position:
+            continue
+        if player.espn_player_id in starting_now:
+            continue      # he still starts somewhere; he is not surplus
+        if player.vor >= PROTECTED_VOR:
+            continue      # too good to cut, whatever the lineup says
+        if all(player.espn_player_id != p.espn_player_id for p in options):
+            options.append(player)
+
+    if not options:
+        return None
+
+    def cost(drop: WeeklyPlayer) -> tuple[float, float]:
+        kept = [p for p in roster if p.espn_player_id != drop.espn_player_id]
+        lineup = _lineup_points(kept + [candidate], shape, use_week=False)
+        # What he was worth as cover, measured the same way a pickup is: against
+        # whoever you could claim instead of him.
+        cover, _ = insurance_value(
+            kept + [candidate], shape, drop, None,
+            streamer=best_streamer(free_agents, drop.position, drop.espn_player_id),
+        )
+        return (lineup, -cover)
+
+    return max(options, key=cost)
+
+
 def _droppable(
     roster: list[WeeklyPlayer], shape: LeagueShape
 ) -> list[DropCandidate]:
@@ -395,7 +450,10 @@ def recommend_waivers(
     targets: list[WaiverTarget] = []
     for candidate in free_agents:
         # Adding someone means dropping someone, unless there's an open spot.
-        drop = drops[0].player if (roster_is_full and drops) else None
+        drop = (
+            choose_drop(roster, shape, candidate, drops, free_agents)
+            if roster_is_full else None
+        )
         trial = [p for p in roster if drop is None or p.espn_player_id != drop.espn_player_id]
         trial = trial + [candidate]
 

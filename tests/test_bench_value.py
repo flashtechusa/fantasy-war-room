@@ -319,3 +319,73 @@ class TestPriorityMeansSomething:
         assert alone[0].priority == mine.priority, (
             "the same player, the same week, the same number"
         )
+
+
+class TestTheDropIsTheManHeReplaces:
+    """Reported from real use: adding a defence, the app said "drop Juwan
+    Johnson (TE)".
+
+    That leaves two defences, one fewer tight end, and the old defence rotting
+    on the bench. The user was going to drop the Jaguars, which is obviously
+    right -- and which the app could not suggest, because _droppable refuses to
+    touch a starter and the Jaguars were his only defence.
+    """
+
+    @staticmethod
+    def _shape():
+        return LeagueShape.from_slots(
+            team_count=10, roster_slots={"WR": 2, "TE": 1, "DST": 1}, bench_slots=3,
+        )
+
+    @staticmethod
+    def _roster():
+        return [
+            _p(1, "My WR1", "WR", 210), _p(2, "My WR2", "WR", 190),
+            _p(3, "Brock Bowers", "TE", 120),
+            _p(4, "Juwan Johnson", "TE", 45),      # only backup tight end
+            _p(5, "Jaguars D/ST", "DST", 55),      # only defence: a starter
+        ]
+
+    def test_a_better_defence_replaces_the_defence(self):
+        wire = [_p(100, "Bengals D/ST", "DST", 90), _p(101, "Spare D/ST", "DST", 30)]
+        target = recommend_waivers(
+            roster=self._roster(), free_agents=wire, shape=self._shape(), week=7,
+            faab_budget=100, roster_is_full=True,
+        )[0]
+        assert target.drop is not None
+        assert target.drop.name == "Jaguars D/ST", (
+            f"the man he replaces, not an unrelated bench player: {target.drop.name}"
+        )
+
+    def test_the_only_backup_at_another_position_is_kept(self):
+        wire = [_p(100, "Bengals D/ST", "DST", 90), _p(101, "Spare D/ST", "DST", 30)]
+        target = recommend_waivers(
+            roster=self._roster(), free_agents=wire, shape=self._shape(), week=7,
+            faab_budget=100, roster_is_full=True,
+        )[0]
+        assert target.drop.name != "Juwan Johnson", (
+            "a backup tight end is worth more than a second defence"
+        )
+
+    def test_a_starter_who_is_still_needed_is_not_cut(self):
+        # A third receiver does not displace anybody: both incumbents still start.
+        wire = [_p(102, "Third WR", "WR", 150)]
+        target = recommend_waivers(
+            roster=self._roster(), free_agents=wire, shape=self._shape(), week=7,
+            faab_budget=100, roster_is_full=True,
+        )
+        if target:
+            assert target[0].drop.name not in {"My WR1", "My WR2"}, (
+                "nobody holding a starting slot gets cut for a backup"
+            )
+
+    def test_a_protected_player_is_never_the_drop(self):
+        roster = self._roster()
+        roster[4].vor = 40.0      # an elite defence, above the protection line
+        wire = [_p(100, "Marginally Better", "DST", 60), _p(101, "Spare", "DST", 30)]
+        targets = recommend_waivers(
+            roster=roster, free_agents=wire, shape=self._shape(), week=7,
+            faab_budget=100, roster_is_full=True,
+        )
+        for target in targets:
+            assert target.drop is None or target.drop.name != "Jaguars D/ST"
