@@ -246,3 +246,76 @@ class TestTheInsuranceFloorDoesNotRejectUsefulBackups:
             faab_budget=100, roster_is_full=True,
         )
         assert targets == []
+
+
+class TestPriorityMeansSomething:
+    """Reported from real use, and the reason a fixed insurance value still read
+    as an instruction: priority was normalised against the best candidate on the
+    list, so the top row always scored 100.
+
+    On a quiet wire the least-bad scrap looked exactly like a league-winner, and
+    a user took "100 PRIORITY" on a third quarterback at face value -- correctly,
+    because that is what the number was saying.
+    """
+
+    def test_a_marginal_add_on_a_quiet_wire_is_not_a_hundred(self):
+        """The reported case: two interchangeable backups and nothing else.
+
+        Neither beats a starter, and each is the other's fallback, so claiming
+        one is worth a few points over claiming the other when you need him.
+        That is a marginal move and has to read as one. (A wire where the only
+        cover is MUCH better than the next option is a different story, and
+        genuinely is a high priority -- see the test below.)
+        """
+        wire = [_p(140, "Backup A", "WR", 150), _p(141, "Backup B", "WR", 145)]
+        for player in wire:
+            player.vor = 15.0      # both worth rostering, neither a starter
+        targets = recommend_waivers(
+            roster=_roster(), free_agents=wire, shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets, "cover is still worth listing"
+        assert targets[0].priority < 40, (
+            f"a quiet wire must read as quiet, got {targets[0].priority}"
+        )
+
+    def test_cover_nobody_else_can_give_you_still_rates_highly(self):
+        # Two starters, no third receiver, and one good option against a scrap
+        # heap. Losing a starter would really cost you, and he really fixes it.
+        wire = [_p(145, "Only Real Option", "WR", 150), _p(146, "Scrap", "WR", 40)]
+        targets = recommend_waivers(
+            roster=_roster(), free_agents=wire, shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets[0].priority > 60, (
+            "depth you cannot get anywhere else is not a marginal move"
+        )
+
+    def test_a_real_upgrade_still_reaches_the_top_of_the_scale(self):
+        wire = [_p(142, "Clear Upgrade", "WR", 400)]
+        targets = recommend_waivers(
+            roster=_roster(), free_agents=wire, shape=_shape(), week=1,
+            faab_budget=100, roster_is_full=True,
+        )
+        assert targets[0].priority == 100.0
+
+    def test_a_player_elsewhere_on_the_wire_does_not_move_his_number(self):
+        """The point of an absolute scale: his number is about him.
+
+        Note what does NOT hold here -- another player at HIS position changes
+        what he is worth, and should, because it changes what you could claim
+        instead of him. A running back cannot do that to a receiver.
+        """
+        alone = recommend_waivers(
+            roster=_roster(), free_agents=[_p(143, "Cover Guy", "WR", 150)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )
+        crowded = recommend_waivers(
+            roster=_roster(),
+            free_agents=[_p(143, "Cover Guy", "WR", 150), _p(144, "A Back", "RB", 400)],
+            shape=_shape(), week=1, faab_budget=100, roster_is_full=True,
+        )
+        mine = next(t for t in crowded if t.player.espn_player_id == 143)
+        assert alone[0].priority == mine.priority, (
+            "the same player, the same week, the same number"
+        )

@@ -39,6 +39,19 @@ INSURANCE_DISCOUNT = 0.35
 #: hole in a known week, so it is not discounted as hard.
 BYE_COVER_DISCOUNT = 0.6
 
+#: What a 100 means.
+#:
+#: Priority used to be normalised against the best candidate on the list, so the
+#: top row scored 100 whatever it was worth -- the least-bad option on a quiet
+#: wire looked exactly like a league-winner. A user read "100 PRIORITY" on a
+#: third quarterback and reasonably took it as an instruction.
+#:
+#: It is measured against a fixed yardstick now: the rest-of-season gain that
+#: makes something a must-add. A marginal pickup reads as marginal, the number
+#: means the same thing from one week to the next, and a wire with nothing on it
+#: says so instead of promoting its best scrap.
+PRIORITY_REFERENCE_POINTS = 25.0
+
 #: How much of the starter a backup has to be worth before he counts as cover.
 #:
 #: Without a floor, "insurance" means "better than an empty slot", and every
@@ -429,7 +442,7 @@ def recommend_waivers(
 
     # Priority blends the immediate and the durable; season value dominates
     # because a wrong week costs you once and a wrong season costs you all year.
-    peak = max(t.season_gain * 0.7 + t.week_gain * 0.3 for t in targets) or 1.0
+
     for target in targets:
         # Insurance counts, at a discount: it only pays out when something goes
         # wrong. A bye is a certainty rather than a risk, so it counts for more.
@@ -441,7 +454,9 @@ def recommend_waivers(
             + target.week_gain * 0.3
             + target.insurance_gain * cover
         )
-        target.priority = round(max(0.0, min(100.0, 100.0 * blended / peak)), 1)
+        target.priority = round(
+            max(0.0, min(100.0, 100.0 * blended / PRIORITY_REFERENCE_POINTS)), 1
+        )
 
         if budget > 0:
             # Bid on what he adds to the lineup you are actually fielding.
