@@ -137,6 +137,14 @@ export default function App() {
             {health.data?.build?.bundle && (
               <span className="faint"> · {health.data.build.bundle.slice(6, 14)}</span>
             )}
+            {/* And which COMMIT. The bundle hash only changes when the frontend
+                does, so a backend-only deploy -- a scoring fix, a waiver rule --
+                left the fingerprint identical and there was no way to tell
+                whether it had landed. That happened: a user watched an unchanged
+                fingerprint and reasonably concluded the fix had not shipped. */}
+            {health.data?.build?.commit && (
+              <span className="faint"> · {health.data.build.commit}</span>
+            )}
           </div>
         </div>
         <StaleBundleNotice serverBundle={health.data?.build?.bundle} />
